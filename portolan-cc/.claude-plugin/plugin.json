@@ -1,0 +1,21 @@
+{
+  "name": "portolan",
+  "description": "Long-horizon task management for Claude Code — intake alignment, automated orchestration, independent verification",
+  "version": "0.1.0",
+  "author": {
+    "name": "YK"
+  },
+  "license": "MIT",
+  "keywords": [
+    "long-horizon",
+    "task-management",
+    "orchestration",
+    "verification"
+  ],
+  "skills": [
+    "./skills/long-horizon-task",
+    "./skills/finish",
+    "./skills/continue",
+    "./skills/orchestrate"
+  ]
+}

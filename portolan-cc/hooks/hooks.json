@@ -1,0 +1,9 @@
+{
+  "hooks": {
+    "Stop": [{"hooks": [{"type": "command", "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/stop-hook.py", "timeout": 10}]}],
+    "SessionStart": [{"hooks": [{"type": "command", "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/session-start-hook.py", "timeout": 10}]}],
+    "SubagentStop": [{"hooks": [{"type": "command", "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/subagent-stop-hook.py", "timeout": 10}]}],
+    "PreToolUse": [{"hooks": [{"type": "command", "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/pre-tool-use.py", "timeout": 10}]}],
+    "PreCompact": [{"hooks": [{"type": "command", "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/pre-compact.py", "timeout": 10}]}]
+  }
+}

@@ -1,9 +1,11 @@
-# portolan
+# Portolan
 
-> portolan 插件市场 · Claude Code
-> A Claude Code plugin marketplace for long-horizon agent tasks.（插件交互为中文）
+> 长程任务管理 · Claude Code 插件市场
+> Long-horizon task management for Claude Code.（插件交互为中文）
 
-长程任务的准备-分发-验收层。让 agent 跑长任务时不偏离目标、不假报完成、跑完能独立复核。
+让 agent 跑长任务时不偏离目标、不假报完成、跑完能独立复核。开工前对齐目标、冻结契约，执行中机械判停，跑完换一个干净会话独立验收。
+
+「Portolan」是古代为长途航海导航的海图——这个插件为 agent 的长程任务导航。
 
 ## 安装
 
@@ -21,7 +23,7 @@ Claude Code 里两步：
 | 插件 | 位置 | 状态 |
 |---|---|---|
 | **portolan** | [`portolan-cc/`](portolan-cc/) | Claude Code 轨，可用。详见 [portolan-cc/README](portolan-cc/README.md) |
-| portolan-dsh | `portolan-dsh/` | DSH 轨，规划中 |
+| portolan-dsh | — | DSH 轨，另仓（规划中） |
 
 ## 许可
 

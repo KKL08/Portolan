@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""portolan SubagentStop hook：subagent 返回但无新终态时告警（只告警不阻断，G2）。"""
+"""portolan SubagentStop hook：subagent 返回但无新终态时告警（只告警不阻断）。"""
 import glob, json, os, re, signal, sys
 
 

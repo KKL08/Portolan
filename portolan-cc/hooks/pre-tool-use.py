@@ -2,31 +2,49 @@
 """守卫式 PreToolUse hook：agent 声称完成前必须过机械断言。
 由 hooks.json 随插件自动注册（非 portolan 场景 <5ms 放行）。
 """
+import glob
 import json
 import os
+import re
 import sys
 
 
 def _detect_completion_claim(tool_input: dict) -> bool:
     """启发式检测：这次工具调用是不是"完成声明"？
-    检查 tool_input 里含 "task complete" / "task finished" / "goal satisfied" / "all done" 关键字。
+    tool_input 命中任一完成措辞即算（中英双语）。
     """
     text = json.dumps(tool_input, ensure_ascii=False).lower()
     return any(kw in text for kw in [
         "task complete", "task finished", "goal satisfied", "all done",
+        "任务完成", "任务已完成", "已全部完成", "目标达成", "大功告成",
     ])
 
 
-def _find_task_dir(cwd: str) -> str | None:
-    """在 cwd 下找 .portolan/<slug>/ 任务目录（返回第一个，或 None）"""
-    portolan_root = os.path.join(cwd, ".portolan")
-    if not os.path.isdir(portolan_root):
+def _active_task_dir(cwd: str) -> str | None:
+    """定位这次完成声明指向的任务目录。
+    一个执行会话只推一个任务、一直在写它的 journal——所以目标 = 状态"执行中"
+    且 journal 最近被写过的那个（唯一执行中即精确命中；多个并存取最新推进的）。
+    无执行中任务返回 None（守卫只管执行期的过早完成，其余放行）。"""
+    dirs = [d for d in
+            glob.glob(os.path.join(cwd, ".portolan", "*"))
+            + glob.glob(os.path.join(cwd, "*", ".portolan", "*"))
+            if os.path.isdir(d)]
+    active = []
+    for d in dirs:
+        try:
+            with open(os.path.join(d, "工作底稿.md"), encoding="utf-8") as f:
+                if re.search(r"状态\s*[:：]\s*执行中", f.read()):
+                    active.append(d)
+        except OSError:
+            continue
+    if not active:
         return None
-    for name in sorted(os.listdir(portolan_root)):
-        p = os.path.join(portolan_root, name)
-        if os.path.isdir(p):
-            return p
-    return None
+
+    def _journal_mtime(d: str) -> float:
+        j = os.path.join(d, "journal.md")
+        return os.path.getmtime(j) if os.path.exists(j) else 0.0
+
+    return max(active, key=_journal_mtime)
 
 
 def _has_fresh_evidence(task_dir: str) -> bool:
@@ -53,22 +71,21 @@ def main():
     tool_input = event.get("tool_input", {})
     cwd = event.get("cwd", os.getcwd())
 
-    # 非 portolan 场景 → 放行
-    task_dir = _find_task_dir(cwd)
-    if not task_dir:
+    # 非完成声明 → 放行（含非 portolan 场景）
+    if not _detect_completion_claim(tool_input):
         print(json.dumps({"continue": True}))
         sys.exit(0)
 
-    # 疑似完成声明 → 检查 evidence
-    if _detect_completion_claim(tool_input):
-        if not _has_fresh_evidence(task_dir):
-            # fail-close 真阻断
-            print(json.dumps({
-                "continue": False,
-                "decision": "block",
-                "reason": "portolan guard: 声明完成前必须至少有一条 evidence 落到 journal.md 结构化小节。",
-            }))
-            sys.exit(0)
+    # 完成声明 → 定位正被推进的执行中任务，查 evidence
+    task_dir = _active_task_dir(cwd)
+    if task_dir and not _has_fresh_evidence(task_dir):
+        # fail-close 真阻断
+        print(json.dumps({
+            "continue": False,
+            "decision": "block",
+            "reason": "portolan guard: 声明完成前必须至少有一条 evidence 落到 journal.md 结构化小节。",
+        }))
+        sys.exit(0)
 
     # 默认放行
     print(json.dumps({"continue": True}))

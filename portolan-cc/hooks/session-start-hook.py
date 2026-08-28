@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""portolan SessionStart hook：未完成任务恢复注入（G2）。永不阻断。"""
+"""portolan SessionStart hook：未完成任务恢复注入。永不阻断。"""
 import glob, json, os, re, signal, sys
 
 

@@ -296,7 +296,7 @@ def update_freeze_hash(worksheet_path: str, file_path: str) -> None:
     若该文件哈希不存在则追加，存在则替换。
 
     键用"相对任务目录的路径"（任务目录 = 工作底稿所在目录）：任务目录内文件
-    退化为基名（行为不变），任务目录外的评分标准文件（如 ../../tests/xxx.py）
+    退化为基名，任务目录外的评分标准文件（如 ../../tests/xxx.py）
     保留相对路径，verify-freeze 才能 os.path.join 回原位核对。"""
     task_dir = os.path.dirname(worksheet_path)
     filename = os.path.relpath(file_path, task_dir)

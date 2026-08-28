@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""portolan Stop hook：未收尾任务时阻止父 session 退出（G2/G9）。
+"""portolan Stop hook：未收尾任务时阻止父 session 退出。
 安全边界：8s SIGALRM fail-open；异常一律放行；非 portolan 场景 <5ms 静默过。"""
 import glob
 import json

@@ -5,7 +5,7 @@
     {
       "name": "portolan",
       "source": "./portolan-cc",
-      "description": "长程任务的准备-分发-验收层（Claude Code 轨）：对齐目标、冻结契约、隔离 subagent 执行、干净会话独立验收。"
+      "description": "长程任务的准备-分发-验收层（Claude Code 轨）：对齐目标、冻结任务清单、隔离 subagent 执行、干净会话独立验收。"
     }
   ]
 }

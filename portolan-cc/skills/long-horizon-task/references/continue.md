@@ -4,19 +4,42 @@
 
 > **与 orchestrate.md 的边界**：要人拍板的续跑走本篇（决策卡三态 approve/reject/defer——需批准、被阻塞 confirmed、finish 不通过找人等停点）；无需人的自动重派（无终态恢复、假阻塞拒收重派、无进展换思路）走 orchestrate.md，不进本篇。
 
-## 第 0 步：核对冻结哈希
+## 第 0 步：核对冻结哈希（resume 必查锚点）
 
-**在读任何协议文件之前**，先跑 state-guard 核对四文件（任务协议单 / rubric /
-execution.md / journal）冻结哈希：
+**恢复是三个必查校验锚点之一**（另两个：gate 停点前、finish 全量），不随校验档位
+变——冷启动、compact 热恢复、长停摆续跑都必须先核对。**在读任何协议文件之前**，
+先跑 state-guard 核对四文件（任务协议单 / rubric / execution.md / journal）冻结哈希：
 
 ```bash
 state-guard verify-freeze --task-dir .portolan/<slug>/
 ```
 
 - 退出码 0 → 协议未被篡改，继续入口
-- 退出码 1 → 报错 hash mismatch，**阻止推进**；将 diff 摆给用户，等决策
+- 退出码 1 → 报错 hash mismatch，**阻止推进**；先对出信号的文件跑
+  `state-guard verify-freeze --task-dir .portolan/<slug>/ --explain --file <相对路径>`
+  拿归因（integrity_broken 直达人工），再按下方"信号分诊"处置，把 diff 摆给用户等决策
 - state-guard 未装机 → 退化为口头提醒"请人工核对任务协议单/rubric/execution.md
   从上一模式退出后是否被改过"，不强制阻断
+
+## 信号分诊（pending_signal 消费声明）
+
+**编排层派发下一 attempt 前，见 sidecar `pending_signal` 非空必先走 triage 流程**，
+不得直接重派：
+
+```bash
+state-guard triage --task-dir .portolan/<slug>/ --file <出信号文件>
+```
+
+- `step0 == integrity_broken` → 直达人工，不盲审（快照或记录本身可疑）
+- `triage_mode == manual` → 全部信号直接找人，不盲审
+- 否则（assisted + 完整）→ 按 `review_inputs` 派盲审 subagent（协议见
+  `references/triage-review.md`），拿到方向后
+  `state-guard triage --file <path> --review-verdict <tighten|equivalent|loosen|redirect>`
+  收尾：tighten/equivalent 自动追认继续跑，loosen/redirect 置 gate 停点摆给人
+- 熔断：自上次人批 amend 以来 triage-auto 连续 3 条，第 4 次信号无条件转人工
+
+pending_signal 是提示位（无安全依赖），被删则下一锚点重新检出、journal 已留痕，
+不构成绕过。
 
 ## 生成"当前进展 8 项"结构化恢复包
 
@@ -72,6 +95,37 @@ state-guard validate-schema --type progress8 --input current_progress.yaml
 **不可逆动作**：摆详情——要做什么、为什么不可逆、有没有替代方案。该条目有前置条件的，continue 先亲手重跑核验命令，实测结果与详情一并摆给用户，前置不满足则不进入批准。同协议内的后续不可逆点可在同次停点逐项摆详情、逐项批准，批注区各记一行。用户点头后记批注区"已批准 + 日期"，续跑。批准的动作由续跑的 `/goal` 执行环执行，continue 会话本身不执行。
 
 **人工验收点**：摆证据给用户判——环节产出、eval 结果、参照解对比。用户判过/不过，记批注区。
+
+**变更提案（sidecar `pending_proposal` 非空）**：执行者发现目标/方案不合理，挂了结构化
+提案。摆决策卡三态给用户：
+
+```
+【决策卡】执行者提了变更提案，怎么办？
+要决什么：{{提案 found + change 一句话}}
+证据：{{pending_proposal.evidence 的 evidence_id 列表}}
+推荐 {{A/B/C}}（理由：{{按提案与证据判断}}）
+A. approve：认可，按提案改冻结文件并追认入账
+B. reject：不认可，回发起修订
+C. defer：先搁置，标被阻塞下次再议
+回复 A 或 B 或 C。
+```
+
+- **approve** → 冻结文件是人批改动，走停点窗口内的受控变更（本期一律人批，不代批）：
+  ```bash
+  # ① 切出 exec（amend-freeze 在 exec 期拒绝执行，合法 amend 只在停点窗口）
+  state-guard orch-set --task-dir .portolan/<slug>/ --field phase --value verify
+  # ② 人在编辑器按提案改冻结文件（continue 会话本身不代改内容）
+  # ③ 受控重冻结，追认条目入 journal（approver=human）
+  state-guard amend-freeze --task-dir .portolan/<slug>/ --file <改的文件> \
+    --reason "<提案摘要>" --approver human
+  # ④ 清掉已消费的提案，再切回 exec 续跑
+  state-guard clear-proposal --task-dir .portolan/<slug>/
+  state-guard orch-set --task-dir .portolan/<slug>/ --field phase --value exec
+  ```
+  批注区记一行"提案已批准 + 日期 + 改了什么"，然后按"续跑"重派。
+- **reject** → `state-guard clear-proposal` 清提案，回"修订"流程（改协议或驳回理由记
+  批注区），不改冻结文件。
+- **defer** → 标"被阻塞"，**保留 pending_proposal 不清**（下次 continue 再议），等用户。
 
 ### 被阻塞
 

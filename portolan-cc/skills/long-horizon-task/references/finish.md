@@ -102,6 +102,31 @@ exit 1（存在未锚定 evidence——command_or_method 对不上任务协议�
 **熔断**：正则误报有 fingerprint（正则 pattern + 匹配 line）+ repeat_count；同一
 fingerprint 触发 3 次以上说明可能是正则问题 → 放行并记警告（不无限阻塞）。
 
+### 追认链轨迹审计（audit-chain）
+
+冻结文件在执行期若走过受控变更（amend-freeze），这些追认必须经得起核验——合法通道
+被滥用、或绕开工具直改文件，都在这一步现形：
+
+```bash
+state-guard audit-chain --task-dir .portolan/<slug>/
+```
+
+一次核四件事，任一不通过即 **finish 判不通过**：
+
+- **追认链哈希衔接**：每个冻结文件的 amend 逐条按时间序，本条 old_hash 必须接上
+  前条 new_hash，首条接初版基线（`.frozen/<name>.v1`）。断链 = 有人手工改了记录
+  或漏了一段。
+- **停点窗口核对**：每条 amend 的时间戳必须落在 phase≠exec 的停点窗口内（窗口由
+  终态声明、信号留痕开启，由其后第一条 evidence 关闭）。落在执行期 = 伪造审批。
+- **人批对应停点**：approver=human 的条目必须落在终态声明开启的窗口里——人批一定
+  对应一个人可见的停点，凭空的人批不认。
+- **放松未经人批**：direction 为 loosen / redirect 的条目 approver 必须是 human。
+  出现 triage-auto 的放松 = 盲审分流被绕过。
+
+退出码非 0 → 差异摆给用户，记 ledger 一行（finish 判定"不通过（追认链异常）"），
+按不通过决策卡走。`chain`（逐条追认）与 `diffs`（v1→vN 全量 diff）一并呈给用户看
+改动全貌。无 amend 历史的任务此步恒通过（空链）。
+
 ### 软 eval 派评审 subagent
 
 软 eval 环节派新上下文的评审 subagent：

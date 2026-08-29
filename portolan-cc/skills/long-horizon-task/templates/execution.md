@@ -25,6 +25,20 @@
 
 **声明终态时必须把终态名、journal 证据指针、关键结果摘要（如测试命令输出末几行）写进对话回复**——evaluator 只看对话已呈现内容，不读文件。被阻塞/需批准还须在 journal 写明复核方式与待批清单（格式照任务目录 journal.md 的终态声明骨架填）。
 
+## 变更提案（发现目标或方案不合理时）
+
+执行者认定问题出在目标或方案本身，不是当前动作卡壳——不碰任何冻结文件（任务协议单、rubric、工作底稿冻结哈希节等），把结构化提案写进 sidecar 的 `pending_proposal` 字段：
+
+```yaml
+pending_proposal:
+  found: <发现了什么，一句话>
+  change: <建议改哪个字段/条目，改成什么>
+  evidence: [<journal evidence_id>, ...]
+  round: <第几轮>
+```
+
+用 `state-guard propose --task-dir <任务目录> --found <一句话> --change <一句话> --evidence <evidence_id,evidence_id,...> --round <轮次>` 写入（工具代笔进 sidecar，执行者不手改 JSON，同 run-check/declare-terminal 的惯例）。写完立即按上面"命名终态"节声明**需批准**——提案是挂在这个既有终态上的载荷，不新增终态。continue 收到后按决策卡三态处理（approve / reject / defer）；本期提案审批一律人批，不设自动追认。
+
 ## 停滞自检（自判，不在 /goal 条件里）
 
 与已有条目实质等价的记录（同环节、同结论、仅措辞不同）不算新证据。环节内连续 {{熔断值}} 次尝试无新证据 → 声明"无进展"，在 journal 终态声明下写收尾报告（熔断前最后几轮的尝试和结果），等 continue。

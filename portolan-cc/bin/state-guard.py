@@ -387,7 +387,7 @@ def _remove_freeze_hash(worksheet_path: str, record_key: str) -> None:
 # （x.py 与 sub/x.py）落不同槽，杜绝静默别名。旧键（纯 basename）读回退 + 写迁移见下。
 
 FROZEN_DIR = ".frozen"
-V1_SUFFIX = ".v1"  # 初版基线拷贝后缀（.frozen/<snap_key>.v1）：audit-chain v1→vN diff 基线
+V1_SUFFIX = ".v1"  # 开工基线拷贝后缀（.frozen/<snap_key>.v1）：准备期跟随刷新、执行期锁死；audit-chain 链锚点与 v1→vN diff 基线
 
 
 def _snap_key(task_dir: str, file_rel: str) -> str:
@@ -412,12 +412,24 @@ def _snap_path_for(task_dir: str, file_rel: str) -> str:
 
 
 def _preserve_v1_snapshot(snap_path: str) -> None:
-    """初版基线拷贝 .frozen/<snap_key>.v1：仅首冻建立，后续 freeze/amend 不覆盖。
-    audit-chain 的 v1→vN 全量 diff 基线——amend 滚动覆盖快照实体，唯此保初版。"""
+    """开工基线拷贝 .frozen/<snap_key>.v1：不存在才建立，已有不覆盖。
+    audit-chain 的 v1→vN 全量 diff 与追认链锚点——amend 滚动覆盖快照实体，唯此保基线。
+    执行期（状态=执行中）走本函数即锁死；准备期由 _refresh_v1_snapshot 跟随刷新。"""
     v1 = snap_path + V1_SUFFIX
     if not os.path.exists(v1):
         shutil.copyfile(snap_path, v1)
         os.chmod(v1, 0o444)
+
+
+def _refresh_v1_snapshot(snap_path: str) -> None:
+    """准备期重冻：v1 开工基线跟随最新快照——协议在准备期合法演进，审计锚点应锚在
+    "被审计期开始的那一刻"而非首冻，否则准备期演进会被误判成无主漂移。"""
+    v1 = snap_path + V1_SUFFIX
+    if os.path.exists(v1):
+        os.chmod(v1, 0o644)
+        os.remove(v1)
+    shutil.copyfile(snap_path, v1)
+    os.chmod(v1, 0o444)
 
 
 def snapshot_frozen_file(task_dir: str, file_path: str) -> str:
@@ -436,8 +448,8 @@ def snapshot_frozen_file(task_dir: str, file_path: str) -> str:
 
 
 def _migrate_legacy_v1(task_dir: str, file_rel: str, new_snap_path: str) -> None:
-    """迁移旧键初版基线 .frozen/<basename>.v1 → 新键 .frozen/<snap_key>.v1（仅当新键 v1
-    未建且旧键 v1 存在）。保住原始 v1 基线，避免 update-freeze 重跑把审计基线错设成当前态。"""
+    """迁移旧键开工基线 .frozen/<basename>.v1 → 新键 .frozen/<snap_key>.v1（仅当新键 v1
+    未建且旧键 v1 存在）。执行期保住 v1 基线，防重跑把审计锚点错设成当前态。"""
     new_v1 = new_snap_path + V1_SUFFIX
     if os.path.exists(new_v1):
         return
@@ -463,20 +475,67 @@ def _cleanup_legacy_snapshot(task_dir: str, file_rel: str) -> None:
     _remove_freeze_hash(_ws_path(task_dir), f"{FROZEN_DIR}/{basename}")
 
 
+def _worksheet_status(task_dir: str) -> str | None:
+    """读工作底稿顶部"状态"字段（与 run-check/hook 同一正则）；缺文件/缺字段返回 None。"""
+    try:
+        with open(_ws_path(task_dir), encoding="utf-8") as f:
+            m = re.search(r"状态\s*[:：]\s*(\S+)", f.read())
+    except OSError:
+        return None
+    return m.group(1) if m else None
+
+
+def _exec_rebaseline_violations(task_dir: str, worksheet_path: str,
+                                 files: list[str]) -> list[str]:
+    """执行期重基线预检：已冻结（有记录）且内容变了的文件清单。
+    首冻（无记录）、幂等重冻（哈希同）、缺 live 文件（交后续流程报错）均放行。"""
+    try:
+        with open(worksheet_path, encoding="utf-8") as f:
+            recorded = _parse_worksheet_hashes(f.read())
+    except OSError:
+        return []
+    blocked = []
+    for f in files:
+        rec = recorded.get(f)
+        if rec is None:
+            continue
+        file_path = os.path.join(task_dir, f)
+        if not os.path.exists(file_path):
+            continue
+        cur = (freeze_hash(file_path) if rec.startswith(FREEZE_HASH_PREFIX)
+               else compute_freeze_hash(file_path))
+        if cur != rec:
+            blocked.append(f)
+    return blocked
+
+
 def freeze_files(task_dir: str, files: list[str]) -> dict:
-    """冻结一组文件（dispatch/continue 调 update-freeze 走这里）：
+    """冻结一组文件（dispatch/准备期调 update-freeze 走这里）：
+    ⓪ 生命周期门禁：状态=执行中时，已冻结文件的内容变更重冻一律拒绝（先全量预检
+       再落盘，拒绝时不留半成品）——重基线能力对任何调用者关闭，合法变更走 amend-freeze
     ① 每文件写 live 规范化哈希进工作底稿冻结哈希节
     ② 复制到 .frozen/<snap_key>（0444），把快照哈希记进同节（键 .frozen/<snap_key>）
     ③ 清理该文件的旧键（.frozen/<basename>）记录与实体——update-freeze 即一次性迁移入口
     ④ 从工作底稿真相源重建 sidecar frozen_paths 缓存，并迁到 schema v2
+    v1 开工基线：准备期跟随刷新，执行期锁死（仅首冻建立）。
     files 相对 task_dir（可指向任务目录外的评分标准文件）。"""
     worksheet_path = _ws_path(task_dir)
+    status = _worksheet_status(task_dir)
+    if status == "执行中":
+        blocked = _exec_rebaseline_violations(task_dir, worksheet_path, files)
+        if blocked:
+            raise RefreezeGuardError(
+                f"状态=执行中：已冻结文件的内容变更禁止 update-freeze 重基线"
+                f"（{', '.join(blocked)}）。基线变更走停点窗口 amend-freeze 追认入账")
     for f in files:
         file_path = os.path.join(task_dir, f)
         update_freeze_hash(worksheet_path, file_path)          # live 哈希
         dst = snapshot_frozen_file(task_dir, file_path)        # 只读快照（新键）
         _migrate_legacy_v1(task_dir, f, dst)                   # 旧键 v1 → 新键（若有）
-        _preserve_v1_snapshot(dst)                             # 初版基线（仅首冻）
+        if status == "执行中":
+            _preserve_v1_snapshot(dst)                         # 开工基线锁死（仅首冻）
+        else:
+            _refresh_v1_snapshot(dst)                          # 准备期基线跟随
         update_freeze_hash(worksheet_path, dst)                # 快照哈希（键 .frozen/<snap_key>）
         _cleanup_legacy_snapshot(task_dir, f)                  # 清旧键（迁移）
     frozen_paths = _rebuild_frozen_paths(task_dir)
@@ -522,6 +581,11 @@ FREEZE_AMEND_HEADING = "冻结变更"
 
 class AmendPhaseError(RuntimeError):
     """phase==exec 时调 amend-freeze（合法 amend 只在停点窗口）"""
+
+
+class RefreezeGuardError(RuntimeError):
+    """状态=执行中时用 update-freeze 对已冻结文件做内容变更重基线（静默洗白路径），
+    须走停点窗口 amend-freeze 追认入账"""
 
 
 class AmendIntegrityError(RuntimeError):
@@ -1021,7 +1085,7 @@ def clear_proposal(task_dir: str) -> None:
 # ── 轨迹审计（audit-chain，T8）──────────────────────────────────
 # finish 终审用，核验追认链的真实性与合法性，四件事：
 # ① 追认链哈希衔接：每文件按 ts 序，entry N old_hash == entry N-1 new_hash，
-#    首条 old_hash == .frozen 初版基线（.v1）哈希——断裂即伪造链。
+#    首条 old_hash == .frozen 开工基线（.v1）哈希——断裂即伪造链。
 # ② 停点窗口核对（威胁模型落地）：每条 amend 的 ts 必须落在 phase!=exec 窗口内。
 #    窗口开启点 = 终态声明（人可见停点）+ 信号留痕（哈希信号待处置停点），关闭点 =
 #    其后第一条 exec evidence（observed_at，标志 exec 恢复）。approver=human 的
@@ -1091,7 +1155,7 @@ def _in_window(ts: str, windows: list[dict], kind: str | None = None) -> bool:
 
 
 def _v1_path_for(task_dir: str, filename: str) -> str:
-    """初版基线实体路径：新键（.frozen/<snap_key>.v1）优先，旧键（.frozen/<basename>.v1）
+    """开工基线实体路径：新键（.frozen/<snap_key>.v1）优先，旧键（.frozen/<basename>.v1）
     回退；都不存在返回新键路径（调用方按不存在处理）。"""
     new_v1 = os.path.join(task_dir, FROZEN_DIR,
                           _snap_key(task_dir, filename) + V1_SUFFIX)
@@ -1105,7 +1169,7 @@ def _v1_path_for(task_dir: str, filename: str) -> str:
 
 
 def _v1_hash_for(task_dir: str, filename: str) -> str | None:
-    """文件初版基线哈希：新键优先、旧键回退的 .v1 规范化哈希；不存在返回 None。"""
+    """文件开工基线哈希：新键优先、旧键回退的 .v1 规范化哈希；不存在返回 None。"""
     v1 = _v1_path_for(task_dir, filename)
     return freeze_hash(v1) if os.path.exists(v1) else None
 
@@ -1137,7 +1201,7 @@ def audit_chain(task_dir: str) -> dict:
             if i == 0:
                 if v1h is not None and old != v1h:
                     failures.append({"code": "v1_anchor_mismatch", "file": fname,
-                                     "detail": f"首条 old_hash={old} 对不上初版基线 {v1h}"})
+                                     "detail": f"首条 old_hash={old} 对不上开工基线 {v1h}"})
             elif old != prev:
                 failures.append({"code": "chain_break", "file": fname,
                                  "detail": f"第 {i + 1} 条 old_hash={old} "
@@ -1161,13 +1225,30 @@ def audit_chain(task_dir: str) -> dict:
             failures.append({"code": "unapproved_loosen", "file": e.get("file"),
                              "detail": f"方向 {direction} 未经人批（approver={approver}）"})
 
-    # ④ v1→vN 全量 diff
-    diffs = {}
     try:
         with open(_ws_path(task_dir), encoding="utf-8") as f:
             recorded = _parse_worksheet_hashes(f.read())
     except OSError:
         recorded = {}
+
+    # ⑤ 无主漂移：当前记录哈希必须被解释——有追认链则等于链末 new_hash，
+    #    无链则等于 v1 开工基线；否则即"绕开工具的静默重基线"（洗白后 verify
+    #    全绿也在此现形）。legacy 无前缀记录哈希空间不同，跳过不误报。
+    for fname in [k for k in recorded if not k.startswith(FROZEN_DIR + "/")]:
+        cur = recorded[fname]
+        if not cur.startswith(FREEZE_HASH_PREFIX):
+            continue
+        evs = by_file.get(fname, [])
+        expected = evs[-1].get("new_hash") if evs else _v1_hash_for(task_dir, fname)
+        if expected is not None and cur != expected:
+            anchor = "链末 new_hash" if evs else "v1 开工基线"
+            failures.append({"code": "unaccounted_rebaseline", "file": fname,
+                             "detail": f"当前冻结记录 {cur[:24]}… 无追认解释"
+                                       f"（{anchor}={str(expected)[:24]}…），疑似绕开"
+                                       f" amend-freeze 的静默重基线"})
+
+    # ④ v1→vN 全量 diff
+    diffs = {}
     for fname in [k for k in recorded if not k.startswith(FROZEN_DIR + "/")]:
         v1_path = _v1_path_for(task_dir, fname)
         live_path = os.path.join(task_dir, fname)
@@ -1179,7 +1260,7 @@ def audit_chain(task_dir: str) -> dict:
             diffs[fname] = unified_freeze_diff(
                 v1b, lb, f"{os.path.basename(v1_path)}", fname)
         else:
-            # 降级：无初版拷贝，逐次 amend diff 摘要串联
+            # 降级：无开工基线拷贝，逐次 amend diff 摘要串联
             diffs[fname] = {"degraded": True,
                             "summaries": [f"{e.get('ts')}: {e.get('diff_summary')}"
                                           for e in by_file.get(fname, [])]}
@@ -2068,7 +2149,12 @@ def main():
                           "count": len(recorded)}, ensure_ascii=False))
         sys.exit(0)
     elif args.cmd == "update-freeze":
-        freeze_files(args.task_dir, args.files)
+        try:
+            freeze_files(args.task_dir, args.files)
+        except RefreezeGuardError as e:
+            print(json.dumps({"error": str(e), "kind": "rebaseline"},
+                             ensure_ascii=False), file=sys.stderr)
+            sys.exit(3)
         sys.exit(0)
     elif args.cmd == "validate-schema":
         with open(args.input, "r", encoding="utf-8") as f:

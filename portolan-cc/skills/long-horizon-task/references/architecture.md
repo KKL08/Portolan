@@ -42,7 +42,7 @@ portolan 管三段：**准备 → 分发 → 验收**。执行由 CC 原生 suba
 | 子命令 | 用途 | 典型调用者 |
 |---|---|---|
 | `verify-freeze` | 核对冻结哈希（含必核文件白名单） | orchestrate、finish 第 0 步 |
-| `update-freeze` | 写入/更新冻结哈希 | dispatch、continue |
+| `update-freeze` | 写入/更新冻结哈希（执行期拒绝已冻结文件的内容变更重冻，走 amend-freeze） | 准备期、dispatch 首冻 |
 | `validate-schema` | YAML schema 校验 | evidence 格式检查 |
 | `freeze-journal` | 冻结 journal（finish 前） | finish 第 0 步 |
 | `orch-get` | 读编排状态（JSON，sidecar 权威） | orchestrate、continue |

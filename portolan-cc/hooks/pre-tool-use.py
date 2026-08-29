@@ -58,7 +58,7 @@ def _block_message(tool_name: str, display_path: str, kind: str) -> str:
 
 def _bash_write_targets(command: str) -> list[str]:
     """从 Bash 命令里挑"写指示符相邻"的候选目标。
-    模式清单小而笨（重定向 / sed -i / tee / mv|cp 尾参 / chmod 尾参），
+    模式清单小而笨（重定向 / sed -i / tee / mv|cp 尾参 / chmod / rm|rmdir），
     漏网的交哈希层兜底，不追求密封。"""
     targets = []
     # 重定向：> file / >> file；排除 2>&1 这类 fd 重定向（目标以 & 开头）
@@ -75,6 +75,9 @@ def _bash_write_targets(command: str) -> list[str]:
         elif base in ("mv", "cp") and rest:
             targets.append(rest[-1])
         elif base == "chmod":
+            targets.extend(rest)
+        elif base in ("rm", "rmdir"):
+            # 删除即破坏：rm 掉 .frozen/ 快照或冻结文件是单次破坏力最大的动作
             targets.extend(rest)
     return targets
 
@@ -258,15 +261,18 @@ def _active_task_dir(cwd: str) -> str | None:
 
 
 def _has_fresh_evidence(task_dir: str) -> bool:
-    """检查 journal.md 里是否有 evidence_id。
-    只检查 evidence 是否存在；freshness 检查留给 finish。
+    """检查 journal.md 是否有落进 ```yaml 围栏的 evidence 条目。
+    与 state-guard parse_evidence_entries 同一判据（只认 yaml 围栏）——
+    模板示例故意用 text 围栏，天然不计入，空 journal 不会误过。
+    只查存在性；freshness 检查留给 finish。
     """
     journal = os.path.join(task_dir, "journal.md")
     if not os.path.exists(journal):
         return False
     with open(journal, encoding="utf-8") as f:
         content = f.read()
-    return "evidence_id" in content
+    return any("evidence_id" in block for block in
+               re.findall(r"```yaml\n(.*?)```", content, re.DOTALL))
 
 
 def main():

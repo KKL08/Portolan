@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="500" viewBox="0 0 900 500" font-family="-apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#475569"/>
+    </marker>
+    <marker id="ai" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#4338ca"/>
+    </marker>
+    <marker id="ar" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#be123c"/>
+    </marker>
+  </defs>
+  <rect x="1" y="1" width="898" height="498" rx="16" fill="#fbfbfd" stroke="#e5e7eb"/>
+
+  <!-- ============ 左：自动化机器 + 状态基座 ============ -->
+  <rect x="88" y="40" width="456" height="130" rx="12" fill="#eef2ff" stroke="#c7d2fe"/>
+  <text x="316" y="62" text-anchor="middle" font-size="12.5" font-weight="700" fill="#3730a3">Portolan 控制层 · 确定性编排与逻辑</text>
+  <rect x="100" y="78" width="130" height="78" rx="8" fill="#ffffff" stroke="#c7d2fe"/>
+  <text x="165" y="108" text-anchor="middle" font-size="12" font-weight="600" fill="#312e81">前期准备</text>
+  <text x="165" y="127" text-anchor="middle" font-size="10" fill="#4338ca">环境初始化</text>
+  <text x="165" y="140" text-anchor="middle" font-size="10" fill="#4338ca">基线冻结</text>
+  <rect x="251" y="78" width="130" height="78" rx="8" fill="#ffffff" stroke="#c7d2fe"/>
+  <text x="316" y="108" text-anchor="middle" font-size="12" font-weight="600" fill="#312e81">核心编排</text>
+  <text x="316" y="127" text-anchor="middle" font-size="10" fill="#4338ca">任务分发</text>
+  <text x="316" y="140" text-anchor="middle" font-size="10" fill="#4338ca">异常分流</text>
+  <rect x="402" y="78" width="130" height="78" rx="8" fill="#ffffff" stroke="#c7d2fe"/>
+  <text x="467" y="108" text-anchor="middle" font-size="12" font-weight="600" fill="#312e81">交付终审</text>
+  <text x="467" y="127" text-anchor="middle" font-size="10" fill="#4338ca">对执行轨迹</text>
+  <text x="467" y="140" text-anchor="middle" font-size="10" fill="#4338ca">独立审计</text>
+
+  <rect x="88" y="206" width="456" height="70" rx="12" fill="#ecfdf5" stroke="#a7f3d0"/>
+  <text x="316" y="230" text-anchor="middle" font-size="13" font-weight="700" fill="#047857">执行层</text>
+  <text x="316" y="249" text-anchor="middle" font-size="11.5" fill="#047857">Claude Code subagent</text>
+  <text x="316" y="265" text-anchor="middle" font-size="9.5" fill="#047857">受控派发 · 带工具自主执行</text>
+
+  <path d="M316 170 L316 206" stroke="#475569" stroke-width="1.7" fill="none" marker-end="url(#a)"/>
+  <text x="310" y="192" text-anchor="end" font-size="10.5" fill="#334155">下发子任务</text>
+
+  <path d="M316 276 L316 296" stroke="#4338ca" stroke-width="1.8" fill="none"/>
+  <rect x="252" y="296" width="128" height="30" rx="15" fill="#eef2ff" stroke="#818cf8"/>
+  <text x="316" y="315" text-anchor="middle" font-size="10.5" font-weight="600" fill="#3730a3">Hook 拦截监督</text>
+  <path d="M316 326 L316 362" stroke="#4338ca" stroke-width="1.8" fill="none" marker-end="url(#ai)"/>
+  <text x="324" y="346" text-anchor="start" font-size="10.5" fill="#334155">提交变更 · 读取状态</text>
+
+  <path d="M88 105 L66 105 L66 362" stroke="#475569" stroke-width="2" fill="none" marker-end="url(#a)"/>
+  <text transform="translate(57,235) rotate(-90)" text-anchor="middle" font-size="10" fill="#334155">冻结 · 校验 · 审计</text>
+
+  <!-- 状态与存证层（基座） -->
+  <rect x="40" y="366" width="520" height="104" rx="14" fill="#fffbeb" stroke="#f59e0b" stroke-width="2.5"/>
+  <text x="300" y="388" text-anchor="middle" font-size="12.5" font-weight="700" fill="#92400e">状态与存证层 · 贯穿任务全程 · 信任自上而下递减</text>
+  <rect x="56" y="400" width="116" height="52" rx="8" fill="#ffffff" stroke="#fcd34d"/>
+  <text x="114" y="421" text-anchor="middle" font-size="11" font-weight="600" fill="#78350f">.frozen/ 快照</text>
+  <text x="114" y="439" text-anchor="middle" font-size="9" fill="#92400e">只读基线（Baseline）</text>
+  <rect x="180" y="400" width="116" height="52" rx="8" fill="#ffffff" stroke="#fcd34d"/>
+  <text x="238" y="421" text-anchor="middle" font-size="11" font-weight="600" fill="#78350f">工作底稿</text>
+  <text x="238" y="439" text-anchor="middle" font-size="9" fill="#92400e">Hash 状态记录</text>
+  <rect x="304" y="400" width="116" height="52" rx="8" fill="#ffffff" stroke="#fcd34d"/>
+  <text x="362" y="421" text-anchor="middle" font-size="11" font-weight="600" fill="#78350f">审计日志</text>
+  <text x="362" y="439" text-anchor="middle" font-size="9" fill="#92400e">仅追加存证链</text>
+  <rect x="428" y="400" width="116" height="52" rx="8" fill="#ffffff" stroke="#fcd34d"/>
+  <text x="486" y="421" text-anchor="middle" font-size="11" font-weight="600" fill="#78350f">Sidecar</text>
+  <text x="486" y="439" text-anchor="middle" font-size="9" fill="#92400e">状态缓存与提示</text>
+
+  <!-- ============ 右：用户角色（满高竖列 + 三触点卡） ============ -->
+  <rect x="660" y="40" width="200" height="430" rx="12" fill="#fff1f2" stroke="#fda4af"/>
+  <text x="760" y="62" text-anchor="middle" font-size="12.5" font-weight="700" fill="#9f1239">用户角色 · 外部监督</text>
+
+  <rect x="676" y="74" width="168" height="66" rx="8" fill="#ffffff" stroke="#fecdd3"/>
+  <text x="760" y="102" text-anchor="middle" font-size="12" font-weight="600" fill="#9f1239">目标对齐</text>
+  <text x="760" y="121" text-anchor="middle" font-size="9.5" fill="#be123c">共定成功画像 · 签署冻结</text>
+
+  <rect x="676" y="208" width="168" height="66" rx="8" fill="#ffffff" stroke="#fecdd3"/>
+  <text x="760" y="236" text-anchor="middle" font-size="12" font-weight="600" fill="#9f1239">关键决策</text>
+  <text x="760" y="255" text-anchor="middle" font-size="9.5" fill="#be123c">关键审阅 · 裁决放行</text>
+
+  <rect x="676" y="385" width="168" height="66" rx="8" fill="#ffffff" stroke="#fecdd3"/>
+  <text x="760" y="413" text-anchor="middle" font-size="12" font-weight="600" fill="#9f1239">最终验收</text>
+  <text x="760" y="432" text-anchor="middle" font-size="9.5" fill="#be123c">审阅终审结论 · 决定接收</text>
+
+  <!-- 用户 ↔ 控制层：对等双向控制回路 -->
+  <path d="M544 78 L660 78" stroke="#475569" stroke-width="1.7" fill="none" marker-end="url(#a)"/>
+  <text x="602" y="68" text-anchor="middle" font-size="10.5" fill="#334155">异常上报 · 请求裁决</text>
+  <path d="M660 116 L544 116" stroke="#475569" stroke-width="1.7" fill="none" marker-end="url(#a)"/>
+  <text x="602" y="132" text-anchor="middle" font-size="10.5" fill="#334155">发起 · 审阅 · 批复</text>
+</svg>

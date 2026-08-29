@@ -43,7 +43,7 @@ Claude Code 里两步：
 /plugin install portolan@portolan
 ```
 
-另需 Python 3.10+（`state-guard` 用到 `fcntl`，仅 macOS / Linux）和 PyYAML。
+另需 Python 3.10+（`state-guard` 用到 `fcntl`，仅 macOS）和 PyYAML。
 
 ## 快速上手
 
@@ -63,39 +63,9 @@ Portolan 追问关键问题，敲定成功画像、验收命令，冻结任务�
 
 ### 分层架构
 
-```mermaid
-graph TB
-    HUMAN["人工角色 · 目标对齐 / 关键决策 / 最终验收"]
-
-    subgraph CTRL["Portolan 控制层 · 确定性编排与逻辑"]
-        PREP["预备阶段 · 环境初始化与基线冻结"]
-        ORCH["核心编排 · 任务分发与异常分流"]
-        FINISH["交付终审 · 执行轨迹审计"]
-        HOOK["写入拦截钩子（Write Hook）"]
-    end
-
-    SUB["执行层 · Claude Code 原生子 Agent"]
-
-    subgraph TRUST["状态与可信层 · 信任级别自上而下逐级递减"]
-        FROZEN[".frozen/ 快照 · 固化只读基线（Baseline）"]
-        SHEET["工作底稿 · Hash 状态记录"]
-        JOURNAL["审计日志 · 仅追加存证链（Append-only）"]
-        SIDECAR["Sidecar · 状态缓存与提示"]
-    end
-
-    HUMAN -->|发起任务| PREP
-    PREP --> ORCH
-    ORCH -->|下发子任务| SUB
-    ORCH -.异常升级 / 需人工裁决.-> HUMAN
-    HUMAN -.启动复核会话.-> FINISH
-    FINISH -.输出审查结果.-> HUMAN
-    SUB -->|提交变更| HOOK
-    HOOK -.拦截未授权直写.-> TRUST
-    SUB -.读写交互.-> SHEET
-    PREP -.写入基线快照.-> FROZEN
-    ORCH -.基线比对校验.-> FROZEN
-    FINISH -.回溯审计日志.-> JOURNAL
-```
+<p align="center">
+  <img src="../assets/architecture.svg" alt="Portolan 分层架构：用户角色（外部监督）· Portolan 控制层 · 执行层 · 状态与存证层" width="100%">
+</p>
 
 ### 异常信号分诊
 
@@ -149,11 +119,11 @@ flowchart LR
 
 ### 核心保证
 
-几条硬约束不靠 agent 自觉，靠代码强制：
+几条关键约束均有把关机制，自动拦截违规操作，减少 agent 幻觉与投机行为，终审全程复盘二次核对：
 
 - **哈希冻结** — 目标、验收标准开工时存 SHA-256 哈希，中途改了立刻留痕
 - **冻评分标准** — 判分逻辑、期望答案一起冻住，agent 改不了考卷
-- **写保护** — 执行期内，hook 拦截常规写路径（Write/Edit/Bash）对冻结文件和 `.frozen/` 快照的直接写入；绕开工具直改，会被下一次哈希校验或 audit-chain 事后抓到
+- **篡改拦截** — 执行期内，hook 当场拦下常规写路径（Write/Edit/Bash）对冻结文件和 `.frozen/` 快照的写入与删除；偶发的遗漏会在下一次校验和最终复盘时兜底检查，最大限度管制异常操作
 - **信号分诊** — 哈希不匹配只是信号，不是篡改定论：先校验快照有没有被一起动过手脚，再对比 diff，再盲审判定改动方向。等价、收紧的改动自动追认继续跑；放松、改向才转人工。`manual` 模式下所有信号一律转人工，不走盲审
 - **变更提案通道** — 执行者发现目标或方案不对，不能直接改冻结文件，只能写结构化提案挂"需批准"，等人批了才用 amend-freeze 入账
 - **轨迹审计** — finish 跑 audit-chain：核对每条追认的哈希是否逐条衔接、时间戳是否落在停点窗口内，有没有未经人批的放松改动，并给出冻结基线到当前的全量 diff

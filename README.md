@@ -2,12 +2,7 @@
 
 <div align="center">
 
-> 长程任务的 Harness · Claude Code 插件
-> A harness for long-horizon agent tasks.
-
-[![Beta](https://img.shields.io/badge/status-beta-orange?style=flat-square)](https://github.com/KKL08/Portolan)
-[![Python 3.10+](https://img.shields.io/badge/python-≥3.10-blue?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
-[![macOS / Linux](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey?style=flat-square)]()
+> 长程任务插件：A plugin for long-horizon agent tasks.
 
 [安装](#安装) · [快速上手](#快速上手) · [工作原理](#工作原理) · [Roadmap](#roadmap)
 
@@ -65,6 +60,56 @@ Portolan 追问关键问题，敲定成功画像、验收命令，冻结任务�
 ```
 
 ## 工作原理
+
+### 分层架构
+
+```mermaid
+graph TB
+    HUMAN["人工角色 · 目标对齐 / 关键决策 / 最终验收"]
+
+    subgraph CTRL["Portolan 控制层 · 确定性编排与逻辑"]
+        PREP["预备阶段 · 环境初始化与基线冻结"]
+        ORCH["核心编排 · 任务分发与异常分流"]
+        FINISH["交付终审 · 执行轨迹审计"]
+        HOOK["写入拦截钩子（Write Hook）"]
+    end
+
+    SUB["执行层 · Claude Code 原生子 Agent"]
+
+    subgraph TRUST["状态与可信层 · 信任级别自上而下逐级递减"]
+        FROZEN[".frozen/ 快照 · 固化只读基线（Baseline）"]
+        SHEET["工作底稿 · Hash 状态记录"]
+        JOURNAL["审计日志 · 仅追加存证链（Append-only）"]
+        SIDECAR["Sidecar · 状态缓存与提示"]
+    end
+
+    HUMAN -->|发起任务| PREP
+    PREP --> ORCH
+    ORCH -->|下发子任务| SUB
+    ORCH -.异常升级 / 需人工裁决.-> HUMAN
+    HUMAN -.启动复核会话.-> FINISH
+    FINISH -.输出审查结果.-> HUMAN
+    SUB -->|提交变更| HOOK
+    HOOK -.拦截未授权直写.-> TRUST
+    SUB -.读写交互.-> SHEET
+    PREP -.写入基线快照.-> FROZEN
+    ORCH -.基线比对校验.-> FROZEN
+    FINISH -.回溯审计日志.-> JOURNAL
+```
+
+### 异常信号分诊
+
+```mermaid
+graph LR
+    M["检测到冻结文件被改动"] --> I{"原始基线<br/>本身可信?"}
+    I -->|否 · 基线也被改过| STOP1["转人工核查"]
+    I -->|是| D["比对改了哪里"]
+    D --> R{"独立盲审<br/>目标改严还是改松?"}
+    R -->|改严 / 等价| AUTO["自动放行 · 继续跑"]
+    R -->|放宽 / 偏离目标| STOP2["转人工拍板"]
+```
+
+### 运行流程
 
 ```mermaid
 flowchart LR

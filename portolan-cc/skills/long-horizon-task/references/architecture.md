@@ -18,7 +18,7 @@ portolan 管三段：**准备 → 分发 → 验收**。执行由 CC 原生 suba
            │调用       │派 subagent │读写任务目录
            ▼           ▼           ▼
      state-guard    执行 subagent   .portolan/<slug>/
-     (14 子命令)    (opus, 隔离)    (五件套 + sidecar)
+     (20 子命令)    (opus, 隔离)    (五件套 + sidecar)
            ▲                        ▲
            │触发                    │block/恢复
      五类 hook ─────────────────────┘
@@ -37,7 +37,7 @@ portolan 管三段：**准备 → 分发 → 验收**。执行由 CC 原生 suba
 
 ### 2. state-guard（确定性工具层）
 
-路径：`bin/state-guard`，14 个 CLI 子命令。
+路径：`bin/state-guard`，20 个 CLI 子命令。
 
 | 子命令 | 用途 | 典型调用者 |
 |---|---|---|
@@ -45,6 +45,11 @@ portolan 管三段：**准备 → 分发 → 验收**。执行由 CC 原生 suba
 | `update-freeze` | 写入/更新冻结哈希（执行期拒绝已冻结文件的内容变更重冻，走 amend-freeze） | 准备期、dispatch 首冻 |
 | `validate-schema` | YAML schema 校验 | evidence 格式检查 |
 | `freeze-journal` | 冻结 journal（finish 前） | finish 第 0 步 |
+| `amend-freeze` | 受控追认重冻结（原子；exec 阶段拒绝） | triage 自动追认、continue 人批入账 |
+| `triage` | 信号分诊：完整性前置 → diff → 盲审输入 / 收尾入账 | orchestrate（哈希信号处置） |
+| `should-verify` | 校验节奏判定（三锚点恒真 + 按档位抽查） | orchestrate |
+| `propose` | 执行者变更提案（写 sidecar pending_proposal） | 执行 subagent |
+| `clear-proposal` | 清除已消费提案（幂等） | continue 决策卡 |
 | `orch-get` | 读编排状态（JSON，sidecar 权威） | orchestrate、continue |
 | `orch-set` | 写编排状态单字段（MUTATION 锁） | orchestrate |
 | `verify-blocked` | 验证"被阻塞"终态（exit 0/1/2） | orchestrate |
@@ -55,6 +60,7 @@ portolan 管三段：**准备 → 分发 → 验收**。执行由 CC 原生 suba
 | `evidence-list` | 列出 journal 全部 evidence（JSON） | finish 第一阶段 |
 | `declare-terminal` | 声明命名终态（写 journal + sidecar） | 执行 subagent |
 | `clear-terminal` | 清除 sidecar 最新终态（派下一 attempt 前） | orchestrate、continue |
+| `audit-chain` | 终审审计：追认链衔接 + 停点窗口 + 放松检测 + 无主漂移 + v1→vN diff | finish 第二阶段 |
 
 所有子命令通过 `state-guard <子命令> --task-dir <任务目录> [参数]` 调用。
 
@@ -71,7 +77,7 @@ portolan 管三段：**准备 → 分发 → 验收**。执行由 CC 原生 suba
 | `rubric.md` | 发起模式、finish | 软 eval 评审标准（有软 eval 才生成；执行者不读） |
 | `批注区.md` | 用户、portolan | 停点期间的人机批注（执行者只读） |
 | `ledger.md` | finish、continue | 终审判定记录 |
-| `state.json` | state-guard 独占 | sidecar——编排状态权威源，9 字段 + 终态四字段 |
+| `state.json` | state-guard 独占 | sidecar——编排状态权威源，10 字段 + 终态四字段 |
 | `checks/` | run-check | 验收命令的输出日志目录 |
 
 ### 4. 模板
@@ -104,6 +110,7 @@ portolan 管三段：**准备 → 分发 → 验收**。执行由 CC 原生 suba
 | `continue.md` | 停点续跑：读四件 → 判断类型 → 组装 → 重入编排 |
 | `finish.md` | 两阶段协议：盲验 → 按需调查 → 判定 |
 | `eval-design-guide.md` | 验收清单设计：eval 三分流 + rubric 编写 |
+| `triage-review.md` | 哈希信号盲审：方向裁决（tighten/equivalent/loosen/redirect）提示词 |
 | `architecture.md`（本文件） | 组件版图速查 |
 
 ## 判定四层

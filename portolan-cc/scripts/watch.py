@@ -87,6 +87,20 @@ def poll_terminal_state(task_dir: str) -> str | None:
     return term["state"] if term else None
 
 
+def decide_mode(task_dir: str) -> str | None:
+    """经 orch-step 决定下一模式：finish / continue / None（通知退出）。"""
+    decision = state_guard.orch_step(task_dir)
+    action = decision.get("action")
+    if action == "dispatch_finish":
+        return "finish"
+    if action in ("dispatch_next_attempt", "recover_subagent"):
+        return "continue"
+    print(f"[watch] orch-step → {action}"
+          f"（{decision.get('reason_kind', decision.get('reason', ''))}），"
+          "通知用户后退出", file=sys.stderr)
+    return None
+
+
 def launch_next_session(task_dir: str, mode: str) -> subprocess.CompletedProcess:
     """subprocess 拉起 CC 会话跑 /portolan:<mode>。
     mode ∈ {'continue','finish'}。
@@ -183,7 +197,10 @@ def watch(task_dir: str, max_blocks: int = 2, poll_interval: int = 3) -> None:
                 continue
 
             try:
-                mode = "finish" if terminal == "完成" else "continue"
+                mode = decide_mode(task_dir)
+                if mode is None:
+                    last_processed_terminal = terminal_key
+                    break
                 print(f"[watch] 拉起 /{mode}（terminal={terminal}）", file=sys.stderr)
                 result = launch_next_session(task_dir, mode)
                 kind = classify_result(result)

@@ -11,7 +11,7 @@ portolan 管三段：**准备 → 分发 → 验收**。执行由 CC 原生 suba
  │ /portolan:long-horizon-task …
  ▼
 ┌──────────────────────────────────────────────┐
-│ skill portolan（父 session）                  │
+│ skill portolan（主 session）                  │
 │  发起模式 → trial-run → dispatch → orchestrate │
 │  continue（续跑）    finish（终审）            │
 └──────────┬───────────┬───────────┬────────────┘
@@ -92,7 +92,7 @@ portolan 管三段：**准备 → 分发 → 验收**。执行由 CC 原生 suba
 
 | Hook | 触发时机 | 行为 |
 |---|---|---|
-| **Stop** | 父 session 退出 | 有执行中任务且 <2h → 真 block；ScheduleWakeup 类 stop 放行（兼容 /loop） |
+| **Stop** | 主 session 退出 | 有执行中任务且 <2h → 真 block；ScheduleWakeup 类 stop 放行（兼容 /loop） |
 | **SessionStart** | 新会话启动 | 有未完成任务 → 打印恢复提示 |
 | **SubagentStop** | subagent 结束 | journal 无新终态 → 告警 |
 | **PreToolUse** | 工具调用前 | 守卫式检查 |
@@ -118,7 +118,7 @@ portolan 管三段：**准备 → 分发 → 验收**。执行由 CC 原生 suba
 终态"能不能收、停在哪、通没通过"分四层，任何一层可否决，通过则接力向上：
 
 1. **执行者自判**（转向权 + 认输权）——声明命名终态
-2. **机械判定**（准入权）——父 session + state-guard 子命令出 pass/fail
+2. **机械判定**（准入权）——主 session + state-guard 子命令出 pass/fail
 3. **语义 review**（建议权，选装）——触发检测
 4. **finish 终局验收**（裁决权）——独立 subagent 亲跑重跑
 

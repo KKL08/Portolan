@@ -1,6 +1,6 @@
 ---
 name: orchestrate
-description: 长程任务编排循环——父 session 自动派发执行 subagent、监控终态、按档位决策重派。等同编排规程的直达入口
+description: 长程任务编排循环——主 session 自动派发执行 subagent、监控终态、按档位决策重派。等同编排规程的直达入口
 ---
 
 ## 入口

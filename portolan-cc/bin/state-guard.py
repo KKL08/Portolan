@@ -1490,6 +1490,468 @@ TERMINAL_STATES = ("完成", "无事可做", "被阻塞", "需批准", "无进�
 _TERMINAL_RE = re.compile(r"终态\s*[:：]\s*\**(" + "|".join(TERMINAL_STATES) + r")\**")
 
 
+# ── orch-step 契约常量（命名单一来源；md 与文档只引用不定义）──────────
+ACTIONS = ("dispatch_next_attempt", "recover_subagent", "dispatch_finish",
+           "run_triage_review", "backoff_retry", "wait_user", "settle")
+HOST_SIGNALS = ("user_stop", "quota", "auth_failure", "context_overflow",
+                "subagent_error")
+STEP_COUNTER_FIELDS = ("redispatch_streak", "refuted_streak",
+                       "noprogress_streak", "recover_count",
+                       "backoff_count", "finish_retry_count")
+REASON_KINDS = (
+    # 政策性停点
+    "user_stop", "auth_failure", "approval_required", "blocked_confirmed",
+    "blocked_unverifiable", "refuted_exhausted", "redispatch_exhausted",
+    "noprogress", "noprogress_exhausted", "recover_exhausted",
+    "idle_unexpected", "conservative_confirm", "signal_escalated",
+    "integrity_broken", "finish_failed", "finish_retry_exhausted",
+    # 具名盘面异常：可预期异常不落 internal_error
+    "journal_missing", "contract_missing", "lock_timeout",
+    "concurrent_mutation",
+    # 兜底：出现即 bug
+    "internal_error")
+
+# 限额与触发阈值（校准只改此处）
+ZERO_FLIP_K = 3        # 零翻转连击提示阈值
+RETHINK_MAX = 2        # 换思路累计提示阈值
+FALLBACK_EVERY = 5     # attempt 兜底提示周期
+REDISPATCH_MAX = 3     # 完成门连败上限
+REFUTED_MAX = 2        # 假阻塞连击上限
+NOPROGRESS_MAX = 2     # 全自动换思路重派上限
+RECOVER_MAX = 2        # 无终态恢复上限
+BACKOFF_MAX = 3        # 被阻塞 confirmed 外部依赖退避上限
+BACKOFF_BASE_SEC = 60  # 退避基数（指数，指数封顶 2^5）
+FINISH_RETRY_MAX = 1   # finish 不通过自动重跑上限
+
+
+def parse_idle_semantics(contract_content: str) -> str:
+    """任务协议单「空轮语义」契约字段：正常收束 | 异常。缺失=异常。"""
+    m = re.search(r"空轮语义\s*[:：]\s*\**(正常收束|异常)", contract_content)
+    return m.group(1) if m else "异常"
+
+
+def read_idle_semantics(task_dir: str) -> str:
+    """优先读 .frozen 快照（与 _read_verify_tier 同则：契约字段随冻结取值）。"""
+    snap = _snap_path_for(task_dir, "任务协议单.md")
+    path = snap if os.path.exists(snap) else os.path.join(task_dir, "任务协议单.md")
+    try:
+        with open(path, encoding="utf-8") as f:
+            return parse_idle_semantics(f.read())
+    except OSError:
+        return "异常"
+
+
+DECISIONS_JSONL = "decisions.jsonl"
+
+
+def append_decision(task_dir: str, decision: dict) -> None:
+    """决策留痕：append-only，单写者=orch-step。效率件留痕，不入冻结面、
+    不做任何安全判定依据。"""
+    rec = dict(decision)
+    rec.setdefault("ts", datetime.datetime.now(datetime.timezone.utc)
+                   .strftime("%Y-%m-%dT%H:%M:%SZ"))
+    with open(os.path.join(task_dir, DECISIONS_JSONL), "a",
+              encoding="utf-8") as f:
+        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        f.flush()
+
+
+def decision_digest(sidecar: dict, host_signal: str | None,
+                    finish_result: str | None) -> str:
+    """决策输入指纹：同指纹 ⇒ 同决定（幂等重放判据）。
+    只取外部输入（终态、信号、phase），不含记账字段（evidence/attempt/
+    baseline）——记账由提交自身推进，入指纹会让 wait_user 提交后永远
+    无法命中重放。"""
+    orch = sidecar.get("orch", {}) or {}
+    key = [sidecar.get("latest_terminal_kind"),
+           sidecar.get("latest_terminal_ts"),
+           orch.get("phase"),
+           json.dumps(sidecar.get("pending_signal"), ensure_ascii=False,
+                      sort_keys=True),
+           json.dumps(sidecar.get("pending_proposal"), ensure_ascii=False,
+                      sort_keys=True),
+           host_signal, finish_result]
+    return hashlib.sha256(json.dumps(key, ensure_ascii=False).encode()).hexdigest()
+
+
+# ── orch-step：编排决策 step function ────────────────────────────
+
+class StepInputError(RuntimeError):
+    """可预期盘面异常：kind ∈ REASON_KINDS 的具名子集。"""
+    def __init__(self, kind: str, detail: str):
+        super().__init__(detail)
+        self.kind = kind
+
+
+def _decision(action: str, instruction: str, *, reason_kind: str | None = None,
+              payload: dict | None = None, advisories: list | None = None,
+              reason: str = "") -> dict:
+    d = {"action": action, "instruction": instruction,
+         "payload": payload or {}, "advisories": advisories or [],
+         "reason": reason}
+    if reason_kind:
+        d["reason_kind"] = reason_kind
+    return d
+
+
+def _wait(kind: str, instruction: str, reason: str = "",
+          payload: dict | None = None) -> dict:
+    return _decision("wait_user", instruction, reason_kind=kind,
+                     payload=payload, reason=reason)
+
+
+def _commit_step(task_dir: str, decision: dict, digest: str,
+                 expected_ts, orch_updates: dict,
+                 pop_terminal: bool) -> bool:
+    """单锁窗口原子提交：复验水位 → 写 orch 字段 + pending_action + 留痕。
+    水位被并发推进则返回 False 让调用方重算。"""
+    lockfile = os.path.join(task_dir, ".state.lock")
+    fd = acquire_lock(lockfile, "MUTATION")
+    try:
+        sidecar = _migrate_sidecar(_read_state_json(task_dir) or {})
+        if sidecar.get("latest_terminal_ts") != expected_ts:
+            return False
+        orch = dict(_ORCH_DEFAULTS)
+        orch.update(sidecar.get("orch") or {})
+        orch.update({k: str(v) for k, v in orch_updates.items()})
+        sidecar["orch"] = orch
+        sidecar["pending_action"] = {**decision, "digest": digest}
+        if pop_terminal:
+            for k in ("latest_terminal_kind", "latest_terminal_ts",
+                      "latest_terminal_reason", "latest_recheck_cmd"):
+                sidecar.pop(k, None)
+        _write_state_json_atomic(task_dir, sidecar)
+        write_projection(_ws_path(task_dir), orch)
+        append_decision(task_dir, {**decision, "digest": digest,
+                                   "attempt": orch.get("attempt")})
+        return True
+    finally:
+        release_lock(fd)
+
+
+def _never_dispatched(task_dir: str, st: dict) -> bool:
+    """首派判定：attempt=0、水位线为空，且决策留痕里无任何派发/恢复记录
+    ——说明从未有 subagent 被派出，「无终态」不是失联而是还没开跑。"""
+    if st.get("terminal_watermark") or int(st.get("attempt") or 0) > 0:
+        return False
+    try:
+        with open(os.path.join(task_dir, DECISIONS_JSONL),
+                  encoding="utf-8") as f:
+            for line in f:
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                if rec.get("action") in ("dispatch_next_attempt",
+                                         "recover_subagent",
+                                         "dispatch_finish"):
+                    return False
+    except OSError:
+        pass
+    return True
+
+
+def _recover(st, n, updates, expected_ts, digest, why: str):
+    if n("recover_count") >= RECOVER_MAX:
+        return (_wait("recover_exhausted",
+                      f"恢复已试 {n('recover_count')} 次（{why}），请人工介入。"),
+                updates, False, expected_ts, digest)
+    method = "send_message" if n("recover_count") == 0 else "cold_restart"
+    tip = ("SendMessage 固定恢复话术：检查你的任务状态，继续执行直到声明命名终态；"
+           "若终态已声明但编排层未消费，用 declare-terminal 重新亲写一条。"
+           if method == "send_message"
+           else "按 continue.md 生成 8 项恢复包，派新执行 subagent 冷启动。")
+    return (_decision("recover_subagent", tip,
+                      payload={"method": method}, reason=why),
+            {**updates, "recover_count": n("recover_count") + 1},
+            False, expected_ts, digest)
+
+
+def _step_compute(task_dir: str, host_signal, context, finish_result):
+    """Phase A：无锁读取 + 子判定（可含 subprocess）。
+    返回 (decision, orch_updates, pop_terminal, expected_ts, digest)；
+    orch_updates 为 None 表示幂等重放（不提交）。"""
+    sidecar = _migrate_sidecar(_read_state_json(task_dir) or {})
+    st = dict(_ORCH_DEFAULTS)
+    st.update(sidecar.get("orch") or {})
+    digest = decision_digest(sidecar, host_signal, finish_result)
+    expected_ts = sidecar.get("latest_terminal_ts")
+
+    # 幂等重放：同指纹的无副作用决定原样返回（不记账不留痕）
+    pa = sidecar.get("pending_action")
+    if pa and pa.get("digest") == digest and pa.get("action") in (
+            "wait_user", "settle", "backoff_retry"):
+        return ({k: v for k, v in pa.items() if k != "digest"},
+                None, False, expected_ts, digest)
+
+    # 人已过手（上一决定 wait_user）且现在有新输入 → 六计数器全清
+    updates: dict = {}
+    if pa and pa.get("action") == "wait_user":
+        updates = {k: "0" for k in STEP_COUNTER_FIELDS}
+        st.update(updates)
+
+    tier = st.get("tolerance_tier") or "全自动"
+
+    def n(k):
+        return int(st.get(k) or 0)
+
+    # ① 宿主信号（门控优先级序：user_stop > 健康类 > 其余）
+    if host_signal == "user_stop":
+        return (_wait("user_stop", "用户已叫停，等待用户指示。"),
+                updates, False, expected_ts, digest)
+    if host_signal == "quota":
+        wait = BACKOFF_BASE_SEC * (2 ** min(n("backoff_count"), 5))
+        updates["backoff_count"] = n("backoff_count") + 1
+        return (_decision("backoff_retry",
+                          f"配额受限：等 {wait} 秒后重跑 orch-step。",
+                          payload={"wait_seconds": wait},
+                          reason="quota 退避（不计恢复熔断）"),
+                updates, False, expected_ts, digest)
+    if host_signal == "auth_failure":
+        return (_wait("auth_failure",
+                      "认证失败，自动重试不能自愈，请人工处理凭据。"),
+                updates, False, expected_ts, digest)
+    if host_signal in ("context_overflow", "subagent_error"):
+        return _recover(st, n, updates, expected_ts, digest,
+                        why=f"宿主信号 {host_signal}")
+
+    # ② finish 结果（phase=verify 时由调用方读回执传入）
+    if finish_result == "pass":
+        return (_decision("settle", "finish 已通过：把回执呈给用户，任务收束。",
+                          payload={"kind": "finish_passed"}),
+                updates, False, expected_ts, digest)
+    if finish_result == "fail":
+        if tier == "全自动" and n("finish_retry_count") < FINISH_RETRY_MAX:
+            updates["finish_retry_count"] = n("finish_retry_count") + 1
+            updates["phase"] = "exec"
+            updates["attempt"] = n("attempt") + 1
+            return (_decision(
+                "dispatch_next_attempt",
+                "带 finish 反馈重派执行 subagent（phase 已置回 exec）。",
+                payload={"hint_kind": "finish 反馈",
+                         "attempt": n("attempt") + 1}),
+                updates, True, expected_ts, digest)
+        kind = ("finish_retry_exhausted"
+                if tier == "全自动"
+                and n("finish_retry_count") >= FINISH_RETRY_MAX
+                else "finish_failed")
+        return (_wait(kind, "finish 未通过：把回执与缺陷摆给用户定夺。"),
+                updates, False, expected_ts, digest)
+
+    # ③ 哈希信号（pending_signal 带 verdict = 已升级；否则跑完整性前置）
+    ps = sidecar.get("pending_signal")
+    if ps:
+        if ps.get("verdict"):
+            return (_wait("signal_escalated",
+                          "冻结信号已升级人工：把 diff 与盲审结论摆给用户。",
+                          payload={"signal": ps}),
+                    updates, False, expected_ts, digest)
+        files = ps.get("files") or ([ps["file"]] if ps.get("file") else [])
+        if not files:
+            return (_wait("signal_escalated", "信号缺文件名，请人工核对。",
+                          payload={"signal": ps}),
+                    updates, False, expected_ts, digest)
+        tri = triage(task_dir, files[0])
+        if tri["disposition"] == "escalate_human":
+            kind = ("integrity_broken"
+                    if tri["step0"] == "integrity_broken" else "signal_escalated")
+            return (_wait(kind, "信号须人工处置：把 triage 结果摆给用户。",
+                          payload={"triage": {k: tri[k] for k in
+                                              ("step0", "triage_mode")}}),
+                    updates, False, expected_ts, digest)
+        return (_decision(
+            "run_triage_review",
+            f"对 {files[0]} 派盲审（协议见 references/triage-review.md），"
+            "拿到方向跑 triage --review-verdict 收尾后再跑 orch-step。",
+            payload={"file": files[0], "review_inputs": tri["review_inputs"],
+                     "diff": tri["diff"]}),
+            updates, False, expected_ts, digest)
+
+    # ④ 校验节奏 + 冻结哈希（三锚点恒真；round 按档位）
+    if should_verify(task_dir, context):
+        mismatches = verify_freeze_hashes(task_dir)
+        if mismatches:
+            f0 = mismatches[0]["file"]
+            tri = triage(task_dir, f0)
+            if tri["disposition"] == "escalate_human":
+                kind = ("integrity_broken"
+                        if tri["step0"] == "integrity_broken"
+                        else "signal_escalated")
+                return (_wait(kind, "冻结哈希异常须人工处置。",
+                              payload={"file": f0}),
+                        updates, False, expected_ts, digest)
+            return (_decision(
+                "run_triage_review",
+                f"冻结哈希不匹配（{f0}）：派盲审定方向后收尾，再跑 orch-step。",
+                payload={"file": f0, "review_inputs": tri["review_inputs"],
+                         "diff": tri["diff"]}),
+                updates, False, expected_ts, digest)
+
+    # ⑤ 读最新终态；水位未推进 → 首派或 recover 阶梯（失联同构）
+    term_kind = sidecar.get("latest_terminal_kind")
+    term_ts = sidecar.get("latest_terminal_ts")
+    if not term_kind or f"{term_kind}@{term_ts}" == st.get("terminal_watermark"):
+        if _never_dispatched(task_dir, st):
+            return (_decision(
+                "dispatch_next_attempt",
+                "首派：prompt = execution.md 全文 + 任务目录，派执行 subagent。",
+                payload={"attempt": n("attempt")}),
+                updates, False, expected_ts, digest)
+        return _recover(st, n, updates, expected_ts, digest,
+                        why="无新终态（subagent 失联或返回未声明）")
+
+    # ⑥ 接受新终态：记账（水位、evidence、checklist 基线）随分支一并提交
+    # journal 守卫先行——evidence_delta/checklist_flips 都要读它，
+    # 缺失必须落具名 journal_missing 而不是 internal_error
+    journal_path = os.path.join(task_dir, "journal.md")
+    try:
+        with open(journal_path, encoding="utf-8") as f:
+            journal = f.read()
+    except OSError as e:
+        raise StepInputError("journal_missing", str(e))
+    ed = evidence_delta(task_dir)
+    cf = checklist_flips(task_dir)
+    _count, fp = evidence_snapshot(journal)
+    accept = {"terminal_watermark": f"{term_kind}@{term_ts}",
+              "evidence_count": ed["total"], "evidence_fingerprint": fp,
+              "checklist_baseline": cf["satisfied"]}
+
+    # 触发检测（advisories：建议权，不碰 action）
+    adv = []
+    zf = (n("zero_flip_streak") + 1
+          if (cf["flips"] == 0 and ed["new_count"] > 0) else 0)
+    accept["zero_flip_streak"] = zf
+    if zf >= ZERO_FLIP_K and ed["new_count"] > 0:
+        adv.append({"signal": "zero_flip", "value": zf, "notify": True})
+    if n("rethink_count") >= RETHINK_MAX:
+        adv.append({"signal": "rethink", "value": n("rethink_count"),
+                    "notify": ed["new_count"] > 0})
+    if n("attempt") and n("attempt") % FALLBACK_EVERY == 0:
+        adv.append({"signal": "fallback", "value": n("attempt"),
+                    "notify": ed["new_count"] > 0})
+
+    def _fin(dec, extra=None, pop=True, bump_attempt=False):
+        u = {**updates, **accept, **(extra or {})}
+        if bump_attempt:
+            u["attempt"] = n("attempt") + 1
+        dec["advisories"] = adv
+        return (dec, u, pop, expected_ts, digest)
+
+    if tier == "保守":
+        return _fin(_wait("conservative_confirm",
+                          f"保守档：终态「{term_kind}」待用户确认后 continue。",
+                          payload={"terminal": term_kind}), pop=False)
+
+    if term_kind == "完成":
+        if cf["total"] > 0 and cf["satisfied"] == cf["total"]:
+            return _fin(_decision(
+                "dispatch_finish",
+                "完成门全过：按 finish.md 输入清单组装 prompt 派干净 finish subagent。"),
+                extra={"redispatch_streak": 0}, pop=False)
+        streak = n("redispatch_streak") + 1
+        if streak >= REDISPATCH_MAX:
+            return _fin(_wait("redispatch_exhausted",
+                              f"完成门连续 {streak} 次未达，请人工定夺。",
+                              payload={"missing": cf["missing"]}),
+                        extra={"redispatch_streak": streak}, pop=False)
+        return _fin(_decision(
+            "dispatch_next_attempt",
+            "完成门未达：带缺项清单重派执行 subagent。",
+            payload={"missing": cf["missing"], "attempt": n("attempt") + 1}),
+            extra={"redispatch_streak": streak}, bump_attempt=True)
+
+    if term_kind == "被阻塞":
+        vb = verify_blocked(task_dir)          # subprocess，锁外
+        if vb["verdict"] == "refuted":
+            streak = n("refuted_streak") + 1
+            if streak >= REFUTED_MAX:
+                return _fin(_wait("refuted_exhausted",
+                                  f"假阻塞连续 {streak} 次，请人工看依赖主张。",
+                                  payload={"refute": vb["reason"]}),
+                            extra={"refuted_streak": streak}, pop=False)
+            return _fin(_decision(
+                "dispatch_next_attempt", "假阻塞：带驳斥理由重派。",
+                payload={"hint_kind": "驳斥理由", "refute": vb["reason"],
+                         "attempt": n("attempt") + 1}),
+                extra={"refuted_streak": streak}, bump_attempt=True)
+        if vb["verdict"] == "confirmed":
+            if tier == "全自动" and n("backoff_count") < BACKOFF_MAX:
+                wait = BACKOFF_BASE_SEC * (2 ** min(n("backoff_count"), 5))
+                return _fin(_decision(
+                    "backoff_retry",
+                    f"外部依赖未通：等 {wait} 秒后重跑 orch-step。",
+                    payload={"wait_seconds": wait}),
+                    extra={"backoff_count": n("backoff_count") + 1}, pop=False)
+            return _fin(_wait("blocked_confirmed",
+                              "阻塞属实：摆复核结果给用户等 continue。",
+                              payload={"recheck": vb["reason"]}), pop=False)
+        return _fin(_wait("blocked_unverifiable",
+                          f"阻塞无法核验（{vb['reason']}）：请人工判断。"),
+                    pop=False)
+
+    if term_kind == "需批准":
+        return _fin(_wait("approval_required",
+                          "硬底线停点：按 continue.md 需批准分流摆详情。"),
+                    pop=False)
+
+    if term_kind == "无进展":
+        if ed["new_count"] > 0:
+            return _fin(_decision(
+                "dispatch_next_attempt",
+                "执行者误判无进展：带增量事实重派。",
+                payload={"hint_kind": "增量事实", "attempt": n("attempt") + 1}),
+                bump_attempt=True)
+        if tier == "全自动" and n("noprogress_streak") < NOPROGRESS_MAX:
+            return _fin(_decision(
+                "dispatch_next_attempt",
+                "零增量：按 orchestrate.md 换思路指引生成新思路重派。",
+                payload={"hint_kind": "换思路", "attempt": n("attempt") + 1}),
+                extra={"noprogress_streak": n("noprogress_streak") + 1,
+                       "rethink_count": n("rethink_count") + 1},
+                bump_attempt=True)
+        kind = "noprogress_exhausted" if tier == "全自动" else "noprogress"
+        return _fin(_wait(kind, "无进展熔断：摆收尾报告出三选决策卡。"),
+                    pop=False)
+
+    if term_kind == "无事可做":
+        if read_idle_semantics(task_dir) == "正常收束":
+            return _fin(_decision("settle", "空轮语义达成：正常收束，通知用户。",
+                                  payload={"kind": "idle_normal"}), pop=False)
+        return _fin(_wait("idle_unexpected",
+                          "协议未约定空轮语义：视异常摆给用户。"), pop=False)
+
+    raise StepInputError("internal_error", f"未覆盖的终态: {term_kind}")
+
+
+def orch_step(task_dir: str, host_signal: str | None = None,
+              context: str = "round",
+              finish_result: str | None = None) -> dict:
+    """编排决策 step function：从盘上状态推出下一动作。decide-only、幂等。"""
+    if host_signal is not None and host_signal not in HOST_SIGNALS:
+        raise ValueError(f"未知宿主信号: {host_signal}（合法：{HOST_SIGNALS}）")
+    if finish_result is not None and finish_result not in ("pass", "fail"):
+        raise ValueError("finish_result ∈ {pass, fail}")
+    try:
+        if not os.path.isfile(os.path.join(task_dir, "任务协议单.md")):
+            raise StepInputError("contract_missing",
+                                 f"{task_dir} 缺任务协议单.md")
+        for _ in range(2):
+            dec, upd, pop, ts, dg = _step_compute(
+                task_dir, host_signal, context, finish_result)
+            if upd is None:          # 幂等重放，不提交
+                return dec
+            if _commit_step(task_dir, dec, dg, ts, upd, pop):
+                return dec
+        return _wait("concurrent_mutation",
+                     "状态被并发推进两次：请重跑 orch-step。")
+    except StepInputError as e:
+        return _wait(e.kind, f"盘面异常（{e.kind}）：{e}。修复后重跑 orch-step。")
+    except (LockReentryError, UnsupportedFileSystemError, TimeoutError) as e:
+        return _wait("lock_timeout", f"锁异常：{e}。稍后重跑 orch-step。")
+    except Exception as e:  # 兜底：出现即 bug
+        return _wait("internal_error", f"orch-step 内部错误：{e!r}。请报告。")
+
+
 def parse_latest_terminal(journal_content: str,
                           task_dir: str | None = None) -> dict | None:
     """终态声明节的最新一条完整记录。返回 {"state","entry"} 或 None。
@@ -1589,7 +2051,9 @@ def parse_eval_standard(contract_content: str) -> list[str]:
 ORCH_FIELDS = ("attempt", "terminal_watermark", "evidence_count",
                "evidence_fingerprint", "zero_flip_streak", "rethink_count",
                "trigger_count", "checklist_baseline", "tolerance_tier",
-               "phase")
+               "phase",
+               "redispatch_streak", "refuted_streak", "noprogress_streak",
+               "recover_count", "backoff_count", "finish_retry_count")
 _ORCH_DEFAULTS = {f: "0" for f in ORCH_FIELDS}
 _ORCH_DEFAULTS.update({"terminal_watermark": "", "evidence_fingerprint": "",
                        "tolerance_tier": "", "phase": "exec"})
@@ -1610,6 +2074,7 @@ _SIDECAR_TOP_DEFAULTS = {
     "frozen_paths": lambda: [],   # list[str]：冻结文件 realpath 缓存（真相源=工作底稿）
     "pending_signal": lambda: None,    # dict|null：钩子检出的哈希信号标记
     "pending_proposal": lambda: None,  # dict|null：执行者变更提案
+    "pending_action": lambda: None,    # dict|null：orch-step 上次发射的决定（重放缓存）
 }
 
 
@@ -1703,7 +2168,11 @@ def orch_get(task_dir: str) -> dict:
             if k in sidecar["orch"]:
                 state[k] = str(sidecar["orch"][k])
         return state
-    # Sidecar 不存在或缺 orch 键 → 从工作底稿 ## 编排状态 节抽字段
+    # Sidecar 不存在或缺 orch 键 → 从工作底稿 ## 编排状态 节抽字段。
+    # 仅在决策留痕存在（编排确实跑过、sidecar 属意外丢失）时采信投影；
+    # 全新任务的投影可能是模板抄写/手改，采信会让"只读投影"播种权威状态。
+    if not os.path.exists(os.path.join(task_dir, DECISIONS_JSONL)):
+        return state  # 无留痕佐证 → 全默认
     try:
         with open(_ws_path(task_dir), "r", encoding="utf-8") as f:
             content = f.read()
@@ -1800,7 +2269,7 @@ def declare_terminal(task_dir: str, state: str, reason: str,
 def clear_terminal(task_dir: str) -> None:
     """清除 sidecar 最新终态字段（latest_terminal_*）。编排接受终态、派下一
     attempt 前调用——防旧终态滞留：stop-hook 依 latest_terminal_kind=='需批准'
-    放行父 session，若不清，重派后新执行期仍按上一轮陈旧终态被误放行；watch
+    放行主 session，若不清，重派后新执行期仍按上一轮陈旧终态被误放行；watch
     的终态轮询亦不再重复命中旧终态。sidecar 缺失则无操作（幂等）。"""
     lockfile = os.path.join(task_dir, ".state.lock")
     fd = acquire_lock(lockfile, "MUTATION")
@@ -1871,14 +2340,15 @@ def checklist_flips(task_dir: str, update: bool = False) -> dict:
         journal = f.read()
     cmds = parse_checklist_commands(contract)
     entries = parse_evidence_entries(journal)
-    satisfied = sum(
-        1 for c in cmds
-        if any(str(e.get("command_or_method", "")).strip() == c
-               and e.get("exit_status_or_verdict") in _PASS_VERDICTS
-               for e in entries))
+    ok = {c for c in cmds
+          if any(str(e.get("command_or_method", "")).strip() == c
+                 and e.get("exit_status_or_verdict") in _PASS_VERDICTS
+                 for e in entries)}
+    satisfied = len(ok)
     baseline = int(orch_get(task_dir)["checklist_baseline"] or 0)
     result = {"satisfied": satisfied, "total": len(cmds),
-              "flips": satisfied - baseline}
+              "flips": satisfied - baseline,
+              "missing": [c for c in cmds if c not in ok]}
     if update:
         orch_set(task_dir, "checklist_baseline", str(satisfied))
     return result
@@ -2125,6 +2595,13 @@ def main():
                            help="清除 sidecar pending_proposal（决策卡消费后）")
     p_clp.add_argument("--task-dir", required=True)
 
+    p_step = sub.add_parser("orch-step", help="编排决策：从盘上状态推出下一动作")
+    p_step.add_argument("--task-dir", required=True)
+    p_step.add_argument("--host-signal", choices=list(HOST_SIGNALS))
+    p_step.add_argument("--context", choices=["round", "resume"],
+                        default="round")
+    p_step.add_argument("--finish-result", choices=["pass", "fail"])
+
     args = parser.parse_args()
     if args.cmd == "verify-freeze":
         if args.explain:
@@ -2274,6 +2751,12 @@ def main():
         sys.exit(0 if result["passed"] else 1)
     elif args.cmd == "clear-proposal":
         clear_proposal(args.task_dir)
+        sys.exit(0)
+    elif args.cmd == "orch-step":
+        result = orch_step(args.task_dir, host_signal=args.host_signal,
+                           context=args.context,
+                           finish_result=args.finish_result)
+        print(json.dumps(result, ensure_ascii=False))
         sys.exit(0)
 
 

@@ -170,6 +170,8 @@ C. 放弃：体面收尾
 
 ### 续跑
 
+approve 续跑第一步：跑 `state-guard orch-step --task-dir <任务目录> --context resume`，照返回 action 执行（resume 是恒查锚点，冻结哈希核对由它代办）。以下手动步骤仅在 orch-step 指引缺位时兜底：
+
 重派新 attempt 前先解 verify 闸（finish 判不通过后 phase 停在 verify，不解则新执行者
 run-check/declare-terminal 全被拒）：
 ```bash

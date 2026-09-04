@@ -1,7 +1,23 @@
+# local agent config
 CLAUDE.md
 AGENTS.md
 .claude/
-.DS_Store
+/hooks
+
+# local development material
+docs/
+tests/
+evals/
+workspace/
+output/
+.portolan/
+.portolan-dogfood-src/
+/pytest.ini
+/requirements.txt
+/scripts/
+
 __pycache__/
 *.pyc
-node_modules/
+.pytest_cache/
+.venv/
+.DS_Store

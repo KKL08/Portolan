@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """portolan SessionStart hook：未完成任务恢复注入；compact 源输出再入卡。
 再入卡三段式（注入给意识，重读给内容——不搬运规程原文）。永不阻断。"""
-import glob, json, os, re, signal, sys
+import json, os, re, signal, sys
+
+from portolan_paths import candidate_worksheets
 
 
-def _scan_running(cwd):
+def _scan_running():
     tasks = []
-    for ws in glob.glob(os.path.join(cwd, ".portolan", "*", "工作底稿.md")) \
-            + glob.glob(os.path.join(cwd, "*", ".portolan", "*", "工作底稿.md")):
+    for ws in candidate_worksheets():
         try:
             with open(ws, "r", encoding="utf-8") as f:
                 content = f.read()
@@ -50,7 +51,7 @@ def _reentry_card(t):
 def main(source):
     if os.environ.get("PORTOLAN_HOOK_DISABLE") == "1":
         sys.exit(0)
-    tasks = _scan_running(os.getcwd())
+    tasks = _scan_running()
     if not tasks:
         sys.exit(0)
     if source == "compact":

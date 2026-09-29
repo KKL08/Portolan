@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """portolan Stop hook：未收尾任务时阻止主 session 退出。
 安全边界：8s SIGALRM fail-open；异常一律放行；非 portolan 场景 <5ms 静默过。"""
-import glob
 import json
 import os
 import re
 import signal
 import sys
 import time
+
+from portolan_paths import candidate_worksheets
 
 STALE_SECONDS = 2 * 3600
 
@@ -21,9 +22,7 @@ def main():
     if os.environ.get("PORTOLAN_HOOK_DISABLE") == "1":
         _allow()
     # 最快路径：无 .portolan 目录直接放行（不读 stdin 之外的任何东西前先查）
-    cwd = os.getcwd()
-    candidates = glob.glob(os.path.join(cwd, ".portolan", "*", "工作底稿.md")) \
-        + glob.glob(os.path.join(cwd, "*", ".portolan", "*", "工作底稿.md"))
+    candidates = candidate_worksheets()
     if not candidates:
         _allow()
 

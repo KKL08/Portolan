@@ -38,7 +38,7 @@ Portolan 是一个 Claude Code 插件，专门强化长程任务中的任务需�
 
 > ⚠️ 目前为 **Beta（v0.1.0）** 测试版本：后续迭代中可能会对一些核心功能、流程等进行调整。
 
-Portolan 是 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 插件，需要 Claude Code 运行环境。
+Portolan 是 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 插件，需要 Claude Code **v2.1.219 及以上**（执行 subagent 派 worker 并行分工依赖嵌套 subagent，默认嵌套深度 3 自该版本起提供）。
 
 Claude Code 里两步：
 
@@ -57,7 +57,7 @@ Claude Code 里两步：
 /portolan:long-horizon-task 你的任务目标和需求
 ```
 
-Portolan 追问关键问题，敲定成功画像、验收命令，冻结任务清单，派 subagent 执行。跑完后开新会话终审：
+Portolan 追问关键问题，敲定成功画像、验收命令，冻结任务清单，派 subagent 执行。遇到彼此独立的环节，执行 subagent 会派 worker 并行处理，合并后再逐项亲跑验收命令。跑完后开新会话终审：
 
 ```
 /portolan:finish

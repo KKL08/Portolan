@@ -1,17 +1,14 @@
 #!/usr/bin/env python3
-"""portolan SubagentStop hook：subagent 返回但无新终态时告警（只告警不阻断）；
-并在 round 锚点做确定性哈希校验，检出信号则落 pending_signal + journal 留痕
-（纯代码，不起 LLM——盲审由编排层下次派发前消费 pending_signal 时执行）。"""
-import glob, importlib.util, json, os, re, signal, sys
+"""portolan SubagentStop hook：仅在执行者（portolan:execution-loop）停止时运行，
+对每个执行中任务做两件机械动作，不向任何上下文输出文字：
+- round 锚点确定性哈希校验，检出信号落 pending_signal + journal 留痕
+  （盲审由编排层下次派发前消费 pending_signal 时执行）；
+- 从执行者 transcript 数压缩次数，非零则向 hook-events.jsonl 追加一条
+  executor_compaction 事件（不带 decision 字段，不计入升频触发源）。"""
+import importlib.util, json, os, re, signal, sys
+from datetime import datetime, timezone
 
-
-def _read_sidecar(task_dir):
-    """读 state.json（sidecar 是终态与水位的权威，与 stop-hook 同源）。"""
-    try:
-        with open(os.path.join(task_dir, "state.json"), encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return None
+from portolan_paths import candidate_worksheets
 
 
 def _load_state_guard():
@@ -27,13 +24,59 @@ def _load_state_guard():
         return None
 
 
-def main():
+def _count_compactions(transcript_path):
+    """数 transcript 里 subtype 为 compact_boundary 的记录行；正文里恰好提到该字样的
+    消息不算。文件缺失或不可读返回 0。"""
+    if not transcript_path:
+        return 0
+    n = 0
+    try:
+        with open(os.path.expanduser(transcript_path), encoding="utf-8") as f:
+            for line in f:
+                if "compact_boundary" not in line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(rec, dict) and rec.get("subtype") == "compact_boundary":
+                    n += 1
+    except OSError:
+        return 0
+    return n
+
+
+def _append_compaction_event(task_dir, count, agent_id):
+    """count 是该执行者 transcript 的累计压缩次数。同一执行者被唤醒后再次停止、
+    累计值没变时不重复追加；统计时按 agent_id 取最大值。"""
+    path = os.path.join(task_dir, "hook-events.jsonl")
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    ev = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if (ev.get("event") == "executor_compaction"
+                        and ev.get("agent_id") == agent_id and ev.get("count") == count):
+                    return
+    except OSError:
+        pass
+    entry = {"ts": datetime.now(timezone.utc).isoformat(),
+             "event": "executor_compaction", "count": count, "agent_id": agent_id}
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+
+
+def main(event):
     if os.environ.get("PORTOLAN_HOOK_DISABLE") == "1":
         sys.exit(0)
-    cwd = os.getcwd()
     sg = _load_state_guard()
-    for ws in glob.glob(os.path.join(cwd, ".portolan", "*", "工作底稿.md")) \
-            + glob.glob(os.path.join(cwd, "*", ".portolan", "*", "工作底稿.md")):
+    compactions = None  # 找到执行中任务后才读 transcript，且只读一次
+    for ws in candidate_worksheets():
         try:
             with open(ws, "r", encoding="utf-8") as f:
                 wcontent = f.read()
@@ -42,28 +85,15 @@ def main():
         if not re.search(r"状态\s*[:：]\s*执行中", wcontent):
             continue
         task_dir = os.path.dirname(ws)
-        # round 锚点确定性哈希校验：检出信号写 pending_signal + journal 留痕
         if sg is not None:
             try:
-                sig = sg.stop_hook_round_check(task_dir)
-                if sig:
-                    slug = os.path.basename(task_dir)
-                    print(f"[portolan] 信号：任务「{slug}」round 校验检出哈希不匹配"
-                          f"（{sig.get('count')} 项），已写 pending_signal，"
-                          f"编排层下次派发前须先走 triage 分诊。")
+                sg.stop_hook_round_check(task_dir)
             except Exception:
                 pass
-        # 终态与水位都取自 sidecar（权威）
-        sidecar = _read_sidecar(task_dir)
-        latest = sidecar.get("latest_terminal_kind") if sidecar else None
-        watermark = (sidecar.get("orch", {}).get("terminal_watermark", "")
-                     if sidecar else "")
-        watermark_state = watermark.split("@")[0] if watermark else ""
-        if latest is None or (watermark_state and latest == watermark_state):
-            slug = os.path.basename(task_dir)
-            print(f"[portolan] 警告：任务「{slug}」的 subagent 已返回但 journal "
-                  f"未声明命名终态（或与水位相同）。编排层应先 SendMessage 恢复，"
-                  f"失败再冷启动重派（orchestrate.md「无终态返回」节）。")
+        if compactions is None:
+            compactions = _count_compactions(event.get("agent_transcript_path"))
+        if compactions:
+            _append_compaction_event(task_dir, compactions, event.get("agent_id"))
     sys.exit(0)
 
 
@@ -71,7 +101,6 @@ if __name__ == "__main__":
     try:
         signal.signal(signal.SIGALRM, lambda *_: sys.exit(0))
         signal.alarm(8)
-        json.load(sys.stdin)
-        main()
+        main(json.load(sys.stdin))
     except Exception:
         sys.exit(0)

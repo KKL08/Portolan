@@ -36,7 +36,7 @@ Portolan 是一个 Claude Code 插件，专门强化长程任务中的任务需�
 
 ## 安装
 
-> ⚠️ 目前为 **Beta（v0.1.0）** 测试版本：后续迭代中可能会对一些核心功能、流程等进行调整。
+> ⚠️ 目前为 **Beta（v0.2.0）** 测试版本：后续迭代中可能会对一些核心功能、流程等进行调整。
 
 Portolan 是 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 插件，需要 Claude Code **v2.1.219 及以上**（执行 subagent 派 worker 并行分工依赖嵌套 subagent，默认嵌套深度 3 自该版本起提供）。
 

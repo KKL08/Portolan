@@ -18,9 +18,10 @@ portolan 管三段：**准备 → 分发 → 验收**。执行由 CC 原生 suba
            │调用       │派 subagent │读写任务目录
            ▼           ▼           ▼
      state-guard    执行 subagent   .portolan/<slug>/
-     (20 子命令)    (opus, 隔离)    (五件套 + sidecar)
-           ▲                        ▲
-           │触发                    │block/恢复
+     (21 子命令)    (opus, 隔离)    (五件套 + sidecar)
+           ▲           │派 worker   ▲
+           │           ▼            │
+           │触发   worker（有界）   │block/恢复
      五类 hook ─────────────────────┘
 ```
 
@@ -37,7 +38,7 @@ portolan 管三段：**准备 → 分发 → 验收**。执行由 CC 原生 suba
 
 ### 2. state-guard（确定性工具层）
 
-路径：`bin/state-guard`，20 个 CLI 子命令。
+路径：`bin/state-guard`，21 个 CLI 子命令。
 
 | 子命令 | 用途 | 典型调用者 |
 |---|---|---|
@@ -61,6 +62,7 @@ portolan 管三段：**准备 → 分发 → 验收**。执行由 CC 原生 suba
 | `declare-terminal` | 声明命名终态（写 journal + sidecar） | 执行 subagent |
 | `clear-terminal` | 清除 sidecar 最新终态（派下一 attempt 前） | orchestrate、continue |
 | `audit-chain` | 终审审计：追认链衔接 + 停点窗口 + 放松检测 + 无主漂移 + v1→vN diff | finish 第二阶段 |
+| `orch-step` | 编排决策：从盘上状态推出下一动作（只决策不执行、幂等，每次决定留痕 `decisions.jsonl`） | orchestrate |
 
 所有子命令通过 `state-guard <子命令> --task-dir <任务目录> [参数]` 调用。
 
@@ -77,8 +79,12 @@ portolan 管三段：**准备 → 分发 → 验收**。执行由 CC 原生 suba
 | `rubric.md` | 发起模式、finish | 软 eval 评审标准（有软 eval 才生成；执行者不读） |
 | `批注区.md` | 用户、portolan | 停点期间的人机批注（执行者只读） |
 | `ledger.md` | finish、continue | 终审判定记录 |
-| `state.json` | state-guard 独占 | sidecar——编排状态权威源，10 字段 + 终态四字段 |
+| `state.json` | state-guard 独占 | sidecar——编排状态权威源，16 字段 + 终态四字段 |
 | `checks/` | run-check | 验收命令的输出日志目录 |
+| `decisions.jsonl` | orch-step 独占（append-only） | 编排决定留痕，不入冻结面 |
+| `hook-events.jsonl` | hook 层（PreToolUse 拦截留痕、SubagentStop 压缩计数） | hook 事件留痕：triage 归因读取；带 `decision` 字段的事件计入校验升频 |
+
+worker（执行环派出的并行分工 subagent）不写上表任何文件，也不读 `rubric.md`；它的结论经执行环合并、亲跑 run-check 后才进 journal。
 
 ### 4. 模板
 
@@ -94,7 +100,7 @@ portolan 管三段：**准备 → 分发 → 验收**。执行由 CC 原生 suba
 |---|---|---|
 | **Stop** | 主 session 退出 | 有执行中任务且 <2h → 真 block；ScheduleWakeup 类 stop 放行（兼容 /loop） |
 | **SessionStart** | 新会话启动 | 有未完成任务 → 打印恢复提示 |
-| **SubagentStop** | subagent 结束 | journal 无新终态 → 告警 |
+| **SubagentStop** | 执行者结束（matcher 限定 `portolan:execution-loop`，worker 与其他 subagent 不触发） | round 锚点哈希校验，检出信号落 pending_signal + journal 留痕；数执行者 transcript 的压缩次数，非零则向 `hook-events.jsonl` 追加 `executor_compaction` 事件（不计入升频）；不向任何上下文输出文字 |
 | **PreToolUse** | 工具调用前 | 守卫式检查 |
 | **PreCompact** | 上下文压缩前 | 注入活跃任务编排状态摘要，防止压缩后失忆 |
 
@@ -112,6 +118,17 @@ portolan 管三段：**准备 → 分发 → 验收**。执行由 CC 原生 suba
 | `eval-design-guide.md` | 验收清单设计：eval 三分流 + rubric 编写 |
 | `triage-review.md` | 哈希信号盲审：方向裁决（tighten/equivalent/loosen/redirect）提示词 |
 | `architecture.md`（本文件） | 组件版图速查 |
+
+### 7. agent 定义
+
+路径：`agents/`，插件系统默认扫描，命名空间为插件名。
+
+| agent | 谁派 | 作用 |
+|---|---|---|
+| `portolan:execution-loop` | 编排者（`dispatch_next_attempt`、`recover_subagent` 的 cold_restart） | 执行环。system prompt 只装身份、五条硬规则、续接后先重读清单；规程正文在任务目录 execution.md |
+| `portolan:worker` | 执行环 fan-out；试跑按需项 7 验路径 | 有界 worker，不能再派 subagent（`disallowedTools: Agent`）；改代码的由派发方按次加 `isolation: worktree`；回报五项事实，不下完成或通过结论 |
+
+system prompt 是 subagent 上下文里唯一不被压缩摘要的位置。两个 agent 正文全部静态（不含任务目录、日期、attempt），执行者压缩续接后按正文清单重读 execution.md、任务协议单、批注区与 journal 取回规程。同时活跃 worker 数的硬限在 execution.md「并行建议」节（底稿运行参数「并行上限」，合法 1–8，默认 6）。
 
 ## 判定四层
 
@@ -140,7 +157,7 @@ portolan 管三段：**准备 → 分发 → 验收**。执行由 CC 原生 suba
 - **eval 三分流**：`硬 eval / 软 eval / 人工点`
 - **裁判层级四级**（按序、不可倒置）：条件核对 → 机械验证 → 质量评审 → 人工判定
 - **置信三标**：`✅` 稳 / `🟡` 存疑 / `🔴` 未验证
-- **编排状态字段**：state-guard `ORCH_FIELDS`（10 字段，见 state-guard 与 implementation spec）
+- **编排状态字段**：state-guard `ORCH_FIELDS`（16 字段，见 state-guard 与 implementation spec）
 - **verifier_id 类型**：`finish-session-{uuid}` / `subagent-{uuid}` / `user:{git_username}` / `run-check-{uuid8}`
 - **结构化字段**：验收命令 `- 验收命令：\`X\``；复核命令 `复核方式：\`X\``（反引号硬要求）
 
@@ -151,4 +168,4 @@ portolan 管三段：**准备 → 分发 → 验收**。执行由 CC 原生 suba
 2. finish 独立性（亲跑重跑，不采信自报）
 3. 协议冻结（SHA-256 哈希，finish 第 0 步核对；含声明的评分标准文件）
 4. 终态五值封闭枚举（完成/无事可做/被阻塞/需批准/无进展）
-5. 执行者不读 rubric（防信息污染 finish）
+5. 执行者与 worker 不读 rubric，执行者派 worker 时也不转述其内容（防信息污染 finish）

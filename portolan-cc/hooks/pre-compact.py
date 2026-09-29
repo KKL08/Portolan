@@ -1,20 +1,19 @@
 #!/usr/bin/env python3
 """portolan PreCompact hook：上下文压缩前注入编排状态摘要，防止压缩后失忆。
 永不阻断；无活跃任务时 <5ms 静默退出。"""
-import glob
 import json
 import os
 import re
 import signal
 import sys
 
+from portolan_paths import candidate_worksheets
+
 
 def main():
     if os.environ.get("PORTOLAN_HOOK_DISABLE") == "1":
         sys.exit(0)
-    cwd = os.getcwd()
-    candidates = glob.glob(os.path.join(cwd, ".portolan", "*", "工作底稿.md")) \
-        + glob.glob(os.path.join(cwd, "*", ".portolan", "*", "工作底稿.md"))
+    candidates = candidate_worksheets()
     if not candidates:
         sys.exit(0)
 

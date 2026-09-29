@@ -1660,7 +1660,7 @@ def _recover(st, n, updates, expected_ts, digest, why: str):
     tip = ("SendMessage 固定恢复话术：检查你的任务状态，继续执行直到声明命名终态；"
            "若终态已声明但编排层未消费，用 declare-terminal 重新亲写一条。"
            if method == "send_message"
-           else "按 continue.md 生成 8 项恢复包，派新执行 subagent 冷启动。")
+           else "按 continue.md 生成 8 项恢复包，按 portolan:execution-loop 类型派新执行 subagent 冷启动。")
     return (_decision("recover_subagent", tip,
                       payload={"method": method}, reason=why),
             {**updates, "recover_count": n("recover_count") + 1},
@@ -1727,7 +1727,7 @@ def _step_compute(task_dir: str, host_signal, context, finish_result):
             updates["attempt"] = n("attempt") + 1
             return (_decision(
                 "dispatch_next_attempt",
-                "带 finish 反馈重派执行 subagent（phase 已置回 exec）。",
+                "带 finish 反馈按 portolan:execution-loop 类型重派执行 subagent（phase 已置回 exec）。",
                 payload={"hint_kind": "finish 反馈",
                          "attempt": n("attempt") + 1}),
                 updates, True, expected_ts, digest)
@@ -1794,7 +1794,7 @@ def _step_compute(task_dir: str, host_signal, context, finish_result):
         if _never_dispatched(task_dir, st):
             return (_decision(
                 "dispatch_next_attempt",
-                "首派：prompt = execution.md 全文 + 任务目录，派执行 subagent。",
+                "首派：prompt = execution.md 全文 + 任务目录，按 portolan:execution-loop 类型派执行 subagent。",
                 payload={"attempt": n("attempt")}),
                 updates, False, expected_ts, digest)
         return _recover(st, n, updates, expected_ts, digest,
@@ -1856,7 +1856,7 @@ def _step_compute(task_dir: str, host_signal, context, finish_result):
                         extra={"redispatch_streak": streak}, pop=False)
         return _fin(_decision(
             "dispatch_next_attempt",
-            "完成门未达：带缺项清单重派执行 subagent。",
+            "完成门未达：带缺项清单按 portolan:execution-loop 类型重派执行 subagent。",
             payload={"missing": cf["missing"], "attempt": n("attempt") + 1}),
             extra={"redispatch_streak": streak}, bump_attempt=True)
 

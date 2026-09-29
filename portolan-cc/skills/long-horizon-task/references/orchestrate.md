@@ -3,7 +3,7 @@
 > 读者：dispatch 组装完成后的主 session（portolan 三模式之一）。
 > 边界：要人拍板的续跑走 continue.md（决策卡三态）；本篇只管无需人的自动路径。
 > 铁律一：编排分支判定一律出自 `state-guard orch-step`，不凭对话记忆分支。
-> 铁律二：派 subagent 的唯一正当理由是需要干净独立上下文（execution / finish）。
+> 铁律二：编排者只派三种 subagent：execution、finish、哈希信号盲审（triage），理由都是干净独立上下文。执行环可为彼此独立的有界环节派 worker 并行分工，上限见 execution.md 硬限。机械检查走 state-guard/bash 不派 agent；执行期不自派质量评审。
 > 铁律三：本编排激活期间勿开 watch.py daemon（互斥，防双重派发）。用户新指令写批注区，不注入运行中的 subagent。
 
 ## 编排循环
@@ -24,8 +24,8 @@ advisories 非空时：对话里提示一句 + 批注区转向建议表各落一
 
 | action | 怎么执行 |
 |---|---|
-| `dispatch_next_attempt` | 派执行 subagent（background）：prompt = execution.md 全文 + 任务目录 + payload 里的 hints。hint_kind=换思路 时按下方「换思路指引」生成新思路写入 prompt；attempt 计数与终态清理 orch-step 已代办，勿再手动 orch-set |
-| `recover_subagent` | method=send_message：向原 subagent 发固定恢复话术"检查你的任务状态，继续执行直到声明命名终态；若终态已声明但编排层未消费，用 declare-terminal 重新亲写一条"（此为唤醒不是新指令）。method=cold_restart：按 continue.md 生成 8 项恢复包，派新执行 subagent |
+| `dispatch_next_attempt` | 派执行 subagent（`subagent_type: portolan:execution-loop`，background）：prompt = execution.md 全文 + 任务目录 + payload 里的 hints。hint_kind=换思路 时按下方「换思路指引」生成新思路写入 prompt；attempt 计数与终态清理 orch-step 已代办，勿再手动 orch-set |
+| `recover_subagent` | method=send_message：向原 subagent 发固定恢复话术"检查你的任务状态，继续执行直到声明命名终态；若终态已声明但编排层未消费，用 declare-terminal 重新亲写一条"（此为唤醒不是新指令）。method=cold_restart：按 continue.md 生成 8 项恢复包，派新执行 subagent（`subagent_type: portolan:execution-loop`） |
 | `dispatch_finish` | 按 finish.md 两阶段协议组装 prompt 派干净 finish subagent：第一阶段只给 任务协议单 + rubric + evidence 重跑指引 + 代码目录（不给 journal）。finish 返回后读回执结论，以 `--finish-result pass|fail` 回报 orch-step |
 | `run_triage_review` | 按 references/triage-review.md 派盲审 subagent（输入 = payload.review_inputs 与 diff），拿到方向跑 `state-guard triage --file <文件> --review-verdict <方向>` 收尾，然后回到循环 |
 | `backoff_retry` | 等 payload.wait_seconds 秒（可用 `sleep N`），然后回到循环 |

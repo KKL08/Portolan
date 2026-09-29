@@ -3,13 +3,15 @@
 由 hooks.json 随插件自动注册（非 portolan 场景 <5ms 放行）。
 写拦截判定先于完成宣称拦截执行——两者是独立职责，各自可单测。
 """
-import glob
 import json
 import os
 import re
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from portolan_paths import candidate_worksheets  # noqa: E402
 
 
 WRITE_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")
@@ -237,17 +239,14 @@ def _active_task_dir(cwd: str) -> str | None:
     """定位这次工具调用指向的活跃任务目录。
     一个执行会话只推一个任务、一直在写它的 journal——所以目标 = 状态"执行中"
     且 journal 最近被写过的那个（唯一执行中即精确命中；多个并存取最新推进的）。
+    候选任务来自 portolan_paths.candidate_worksheets(cwd)（项目根、cwd 及其祖先）。
     无执行中任务返回 None（写拦截与完成宣称拦截均只管这类任务，其余放行）。"""
-    dirs = [d for d in
-            glob.glob(os.path.join(cwd, ".portolan", "*"))
-            + glob.glob(os.path.join(cwd, "*", ".portolan", "*"))
-            if os.path.isdir(d)]
     active = []
-    for d in dirs:
+    for ws in candidate_worksheets(cwd):
         try:
-            with open(os.path.join(d, "工作底稿.md"), encoding="utf-8") as f:
+            with open(ws, encoding="utf-8") as f:
                 if re.search(r"状态\s*[:：]\s*执行中", f.read()):
-                    active.append(d)
+                    active.append(os.path.dirname(ws))
         except OSError:
             continue
     if not active:

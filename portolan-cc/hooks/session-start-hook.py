@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """portolan SessionStart hook：未完成任务恢复注入；compact 源输出再入卡。
-再入卡三段式（注入给意识，重读给内容——不搬运规程原文）。永不阻断。"""
+再入卡三段式：状态摘要、读回清单、文件地图。卡片只给指针，内容由编排者亲自读回原文，
+不搬运规程原文。永不阻断。"""
 import json, os, re, signal, sys
 
 from portolan_paths import candidate_worksheets
@@ -32,17 +33,36 @@ def _scan_running():
             info["terminal"] = str(sc.get("latest_terminal_kind") or "无")
         except (OSError, json.JSONDecodeError):
             pass
+        info["goal"] = _goal_first_line(task_dir)
         tasks.append(info)
     return tasks
 
 
+def _goal_first_line(task_dir):
+    try:
+        with open(os.path.join(task_dir, "任务协议单.md"), encoding="utf-8") as f:
+            m = re.search(r"##\s*成功画像\s*\n+([^\n#]+)", f.read())
+    except OSError:
+        return ""
+    return m.group(1).strip() if m else ""
+
+
 def _reentry_card(t):
+    goal = f"目标首行：{t['goal']}\n" if t["goal"] else ""
     return (
         f"[portolan·压缩再入] 任务「{t['slug']}」执行中：attempt={t['attempt']}, "
         f"上次终态={t['terminal']}, 档位={t['tier']}, 目录={t['dir']}。\n"
-        "先完整重读 references/orchestrate.md（循环骨架+动作表+铁律），"
-        f"然后编排动作一律跑 `state-guard orch-step --task-dir {t['dir']} "
-        "--context resume` 并照返回的 action 执行——不凭记忆分支。\n"
+        f"{goal}"
+        "压缩摘要是转述，会丢细节。继续编排前，按顺序亲自读回原文：\n"
+        "1. 完整重读 references/orchestrate.md（循环骨架、动作表、铁律）。\n"
+        "2. 重读任务目录里 任务协议单.md 的成功画像全文，目标以原文为准，"
+        "不按摘要的转述缩小或改写。\n"
+        "3. 读 批注区.md，看有没有未处理的用户指令；压缩摘要里用户说过、"
+        "还没写进批注区的新指令或批准，先补记进去。\n"
+        "4. 压缩摘要里已派出、还没收到 task-notification 的 subagent 视为仍在运行："
+        "等它的 task-notification，期间不跑 orch-step、不重派。\n"
+        f"5. 以上做完，编排动作一律跑 `state-guard orch-step --task-dir {t['dir']} "
+        "--context resume`，照返回的 action 执行，不凭记忆分支。\n"
         "文件地图：references/orchestrate.md=编排规程；references/continue.md="
         "停点分流；任务目录内 任务协议单.md=冻结契约（只读）、journal.md=执行"
         "记录（执行环写）、批注区.md=用户指令入口、工作底稿.md=状态投影（只读）。")

@@ -22,7 +22,7 @@ portolan 管三段：**准备 → 分发 → 验收**。执行由 CC 原生 suba
            ▲           │派 worker   ▲
            │           ▼            │
            │触发   worker（有界）   │block/恢复
-     五类 hook ─────────────────────┘
+     四类 hook ─────────────────────┘
 ```
 
 ## 组件清单
@@ -92,17 +92,16 @@ worker（执行环派出的并行分工 subagent）不写上表任何文件，�
 
 7 个模板文件：`任务协议单.md` / `工作底稿.md` / `execution.md` / `journal.md` / `rubric.md` / `ledger.md` / `批注区.md`。发起模式按模板 + 用户输入生成实际文件。
 
-### 5. 五类 hook
+### 5. 四类 hook
 
 路径：`hooks/`，由 `hooks.json` 声明，插件系统自动注册。
 
 | Hook | 触发时机 | 行为 |
 |---|---|---|
 | **Stop** | 主 session 退出 | 有执行中任务且 <2h → 真 block；ScheduleWakeup 类 stop 放行（兼容 /loop） |
-| **SessionStart** | 新会话启动 | 有未完成任务 → 打印恢复提示 |
+| **SessionStart** | 新会话启动；上下文压缩后 | 有未完成任务 → 打印恢复提示；压缩后输出再入卡（状态摘要、目标首行，再列出要亲自读回的原文：编排规程、成功画像、批注区，已派出未回报的 subagent 先等回报，最后跑 orch-step） |
 | **SubagentStop** | 执行者结束（matcher 限定 `portolan:execution-loop`，worker 与其他 subagent 不触发） | round 锚点哈希校验，检出信号落 pending_signal + journal 留痕；数执行者 transcript 的压缩次数，非零则向 `hook-events.jsonl` 追加 `executor_compaction` 事件（不计入升频）；不向任何上下文输出文字 |
 | **PreToolUse** | 工具调用前 | 守卫式检查 |
-| **PreCompact** | 上下文压缩前 | 注入活跃任务编排状态摘要，防止压缩后失忆 |
 
 所有 hook 遵循 fail-open：portolan 不成为妨碍者。
 
